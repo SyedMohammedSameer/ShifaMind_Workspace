@@ -1123,8 +1123,13 @@ per_label_df = pd.DataFrame({
 per_label_df = per_label_df.sort_values('f1_score', ascending=False)
 per_label_df.to_csv(RESULTS_PATH / 'per_label_f1.csv', index=False)
 
+# Save test predictions for ensemble
+np.save(RESULTS_PATH / 'test_predictions.npy', all_dx_preds)
+np.save(RESULTS_PATH / 'test_labels.npy', all_dx_labels)
+
 print(f"\n💾 Results saved to: {RESULTS_PATH / 'results.json'}")
 print(f"💾 Per-label F1 saved to: {RESULTS_PATH / 'per_label_f1.csv'}")
+print(f"💾 Test predictions saved to: {RESULTS_PATH / 'test_predictions.npy'}")
 print(f"💾 Best model saved to: {CHECKPOINT_PATH / 'phase1_best.pt'}")
 
 print("\n" + "="*80)
@@ -2097,25 +2102,29 @@ model.load_state_dict(checkpoint['model_state_dict'])
 model.eval()
 
 all_preds, all_labels = [], []
+all_probs = []  # Save probabilities for ensemble
 
 with torch.no_grad():
     for batch in tqdm(test_loader, desc="Testing"):
         input_ids = batch['input_ids'].to(device, non_blocking=True)
         attention_mask = batch['attention_mask'].to(device, non_blocking=True)
         dx_labels = batch['labels'].to(device, non_blocking=True)
-        
+
         if USE_AMP:
             with autocast():
                 outputs = model(input_ids, attention_mask)
         else:
             outputs = model(input_ids, attention_mask)
-        
-        preds = (torch.sigmoid(outputs['logits']) > 0.5).cpu().numpy()
+
+        probs = torch.sigmoid(outputs['logits']).cpu().numpy()
+        preds = (probs > 0.5).astype(int)
+        all_probs.append(probs)
         all_preds.append(preds)
         all_labels.append(dx_labels.cpu().numpy())
 
 all_preds = np.vstack(all_preds)
 all_labels = np.vstack(all_labels)
+all_probs = np.vstack(all_probs)
 
 macro_f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
 micro_f1 = f1_score(all_labels, all_preds, average='micro', zero_division=0)
@@ -2162,7 +2171,12 @@ results = {
 with open(RESULTS_PATH / 'results.json', 'w') as f:
     json.dump(results, f, indent=2)
 
+# Save test predictions for ensemble
+np.save(RESULTS_PATH / 'test_predictions.npy', all_probs)  # Save probabilities for ensemble
+np.save(RESULTS_PATH / 'test_labels.npy', all_labels)
+
 print(f"\n💾 Results saved to: {RESULTS_PATH / 'results.json'}")
+print(f"💾 Test predictions saved to: {RESULTS_PATH / 'test_predictions.npy'}")
 print(f"💾 Best model saved to: {CHECKPOINT_PATH / 'phase2_best.pt'}")
 
 print("\n" + "="*80)
@@ -3249,24 +3263,33 @@ print(f"\n✅ Loaded Phase 3 predictions:")
 print(f"   Shape: {phase3_preds.shape}")
 print(f"   Test labels shape: {test_labels.shape}")
 
-# Load Phase 1 and 2 predictions (if available)
-# In practice, you'd save predictions from each phase during evaluation
-# For now, we'll simulate Phase 1 and 2 predictions
+# Load Phase 1 and 2 predictions (real predictions from saved files)
+print("\n📥 Loading Phase 1 and 2 predictions...")
 
-print("\n📝 Note: Phase 1 and 2 predictions would be loaded here")
-print("   For demonstration, using Phase 3 predictions as basis")
+phase1_pred_path = OUTPUT_BASE / 'results' / 'phase1' / 'test_predictions.npy'
+phase2_pred_path = OUTPUT_BASE / 'results' / 'phase2' / 'test_predictions.npy'
 
-# Simulate Phase 1 predictions (slightly different from Phase 3)
-np.random.seed(42)
-phase1_preds = (phase3_preds + np.random.randn(*phase3_preds.shape) * 0.1).clip(0, 1)
+if phase1_pred_path.exists() and phase2_pred_path.exists():
+    # Load real predictions
+    phase1_preds = np.load(phase1_pred_path)
+    phase2_preds = np.load(phase2_pred_path)
 
-# Simulate Phase 2 predictions (between Phase 1 and 3)
-phase2_preds = (0.5 * phase1_preds + 0.5 * phase3_preds + np.random.randn(*phase3_preds.shape) * 0.05).clip(0, 1)
+    print("✅ Loaded REAL predictions from all phases")
+    print(f"   Phase 1: {phase1_preds.shape}")
+    print(f"   Phase 2: {phase2_preds.shape}")
+    print(f"   Phase 3: {phase3_preds.shape}")
+else:
+    # Fallback: simulate if predictions not found (shouldn't happen in normal flow)
+    print("⚠️  Phase 1/2 predictions not found. Using simulated predictions.")
+    print("   This shouldn't happen in normal execution - check if Phase 1/2 completed.")
 
-print(f"\n✅ All predictions loaded:")
-print(f"   Phase 1: {phase1_preds.shape}")
-print(f"   Phase 2: {phase2_preds.shape}")
-print(f"   Phase 3: {phase3_preds.shape}")
+    np.random.seed(42)
+    phase1_preds = (phase3_preds + np.random.randn(*phase3_preds.shape) * 0.1).clip(0, 1)
+    phase2_preds = (0.5 * phase1_preds + 0.5 * phase3_preds + np.random.randn(*phase3_preds.shape) * 0.05).clip(0, 1)
+
+    print(f"   Phase 1 (simulated): {phase1_preds.shape}")
+    print(f"   Phase 2 (simulated): {phase2_preds.shape}")
+    print(f"   Phase 3: {phase3_preds.shape}")
 
 # ============================================================================
 # E3: ENSEMBLE STRATEGIES
