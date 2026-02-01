@@ -1139,3 +1139,1042 @@ print(f"   ✅ Concept F1: {concept_f1:.4f} (target: >0.40)")
 print(f"\n📁 All artifacts saved to: {OUTPUT_BASE}")
 print(f"\nNext: Implement Phase 2 (GraphSAGE) with enhanced concepts")
 print("\nAlhamdulillah! 🤲")
+
+print(f"\nNext: Run Phase 2 (GAT + Rich Knowledge Graph)")
+print("\nAlhamdulillah! 🤲")
+
+"""## Phase 2: GAT + Rich Knowledge Graph (Phase A + B)"""
+
+#!/usr/bin/env python3
+"""
+================================================================================
+SHIFAMIND302 PHASE 2: GAT + Rich Knowledge Graph (Phase A + B Enhancements)
+================================================================================
+
+PHASE A ENHANCEMENTS:
+1. ✅ Load 263 UMLS-enhanced concepts from Phase 1
+2. ✅ GPU optimizations (AMP, larger batches, pin_memory)
+3. ✅ Updated output paths: 11_ShifaMind_v302
+
+PHASE B ENHANCEMENTS:
+1. ✅ Rich Knowledge Graph with UMLS semantic relationships
+2. ✅ 8 edge types: is_a, caused_by, symptom_of, treated_with, co_occurs_with, 
+      contradicts, requires_test, risk_factor_for
+3. ✅ Graph Attention Networks (GAT) instead of GraphSAGE
+4. ✅ Learnable edge weights via attention mechanism
+5. ✅ Edge dropout for regularization
+6. ✅ ICD-10 hierarchical structure integration
+
+Expected Impact:
+- Macro F1: 0.25 → 0.35+ (GraphSAGE was hurting, GAT should help!)
+- Better concept-diagnosis relationships
+- Semantically meaningful graph structure
+
+================================================================================
+"""
+
+print("\n" + "="*80)
+print("🚀 SHIFAMIND302 PHASE 2 - GAT + RICH KNOWLEDGE GRAPH")
+print("="*80)
+
+# ============================================================================
+# IMPORTS
+# ============================================================================
+
+import warnings
+warnings.filterwarnings('ignore')
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
+from torch.cuda.amp import autocast, GradScaler
+
+import numpy as np
+import pandas as pd
+from sklearn.metrics import f1_score
+from transformers import AutoTokenizer, AutoModel, get_linear_schedule_with_warmup
+
+# PyTorch Geometric for GAT
+try:
+    import torch_geometric
+    from torch_geometric.nn import GATConv, HeteroConv
+    from torch_geometric.data import Data, HeteroData
+    PYGEOM_AVAILABLE = True
+except ImportError:
+    print("⚠️  PyTorch Geometric not available. Install with: pip install torch_geometric")
+    PYGEOM_AVAILABLE = False
+    sys.exit(1)
+
+import networkx as nx
+import json
+import pickle
+from pathlib import Path
+from tqdm.auto import tqdm
+from collections import defaultdict
+import sys
+
+# Reproducibility
+SEED = 42
+torch.manual_seed(SEED)
+np.random.seed(SEED)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(SEED)
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"\n🖥️  Device: {device}")
+
+# ============================================================================
+# CONFIGURATION: LOAD FROM PHASE 1
+# ============================================================================
+
+print("\n" + "="*80)
+print("⚙️  CONFIGURATION: LOADING FROM PHASE 1")
+print("="*80)
+
+BASE_PATH = Path('/content/drive/MyDrive/ShifaMind')
+SHIFAMIND302_BASE = BASE_PATH / '11_ShifaMind_v302'
+
+run_folders = sorted([d for d in SHIFAMIND302_BASE.glob('run_*') if d.is_dir()], reverse=True)
+
+if not run_folders:
+    print("❌ No Phase 1 run found in 11_ShifaMind_v302!")
+    sys.exit(1)
+
+OUTPUT_BASE = run_folders[0]
+print(f"📁 Using run folder: {OUTPUT_BASE.name}")
+
+PHASE1_CHECKPOINT = OUTPUT_BASE / 'checkpoints' / 'phase1' / 'phase1_best.pt'
+if not PHASE1_CHECKPOINT.exists():
+    print(f"❌ Phase 1 checkpoint not found!")
+    sys.exit(1)
+
+checkpoint = torch.load(PHASE1_CHECKPOINT, map_location='cpu', weights_only=False)
+phase1_config = checkpoint['config']
+TOP_50_CODES = phase1_config['top_50_codes']
+timestamp = phase1_config['timestamp']
+
+print(f"✅ Loaded Phase 1 config:")
+print(f"   Timestamp: {timestamp}")
+print(f"   Top-50 codes: {len(TOP_50_CODES)}")
+print(f"   Num concepts: {phase1_config['num_concepts']}")
+
+SHARED_DATA_PATH = OUTPUT_BASE / 'shared_data'
+CHECKPOINT_PATH = OUTPUT_BASE / 'checkpoints' / 'phase2'
+RESULTS_PATH = OUTPUT_BASE / 'results' / 'phase2'
+CONCEPT_STORE_PATH = OUTPUT_BASE / 'concept_store'
+
+for path in [CHECKPOINT_PATH, RESULTS_PATH]:
+    path.mkdir(parents=True, exist_ok=True)
+
+with open(SHARED_DATA_PATH / 'concept_list.json', 'r') as f:
+    ALL_CONCEPTS = json.load(f)
+
+print(f"\n🧠 Concepts: {len(ALL_CONCEPTS)}")
+
+# GAT hyperparameters (Phase B)
+GAT_HIDDEN_DIM = 256
+GAT_HEADS = 4
+GAT_LAYERS = 2
+GAT_DROPOUT = 0.3
+EDGE_DROPOUT = 0.2  # New: edge dropout for regularization
+
+# Training hyperparameters
+LAMBDA_DX = 1.0
+LAMBDA_ALIGN = 0.5
+LAMBDA_CONCEPT = 0.3
+LEARNING_RATE = 1e-5
+EPOCHS = 3
+
+# GPU optimization (Phase A)
+USE_AMP = True
+BATCH_SIZE_TRAIN = 16
+BATCH_SIZE_VAL = 32
+PIN_MEMORY = True
+NUM_WORKERS = 2
+PREFETCH_FACTOR = 2
+
+print(f"\n🕸️  GAT Configuration:")
+print(f"   Hidden Dim: {GAT_HIDDEN_DIM}")
+print(f"   Attention Heads: {GAT_HEADS}")
+print(f"   Layers: {GAT_LAYERS}")
+print(f"   Dropout: {GAT_DROPOUT}")
+print(f"   Edge Dropout: {EDGE_DROPOUT}")
+
+print(f"\n🚀 GPU Optimizations:")
+print(f"   Mixed Precision: {USE_AMP}")
+print(f"   Batch Size (Train): {BATCH_SIZE_TRAIN}")
+print(f"   Batch Size (Val): {BATCH_SIZE_VAL}")
+
+# ============================================================================
+# PHASE B: RICH KNOWLEDGE GRAPH CONSTRUCTION
+# ============================================================================
+
+print("\n" + "="*80)
+print("🕸️  BUILDING RICH KNOWLEDGE GRAPH (PHASE B)")
+print("="*80)
+
+def build_icd10_hierarchy(top_50_codes):
+    """
+    Build ICD-10 hierarchical relationships
+    
+    ICD-10 Structure:
+    - Chapter: First letter (e.g., 'I' for circulatory)
+    - Block: First 3 chars (e.g., 'I50' for heart failure)
+    - Category: Full code (e.g., 'I5032' for chronic diastolic heart failure)
+    """
+    hierarchy = defaultdict(list)
+    
+    for code in top_50_codes:
+        chapter = code[0]  # First letter
+        if len(code) >= 3:
+            block = code[:3]  # First 3 characters
+            hierarchy['chapter_to_block'].append((chapter, block))
+            hierarchy['block_to_code'].append((block, code))
+    
+    return hierarchy
+
+
+def build_umls_semantic_relationships(concepts, diagnoses):
+    """
+    Build semantic relationships using UMLS-inspired rules
+    
+    8 Edge Types:
+    1. is_a: Hierarchical (e.g., "pneumonia" is_a "infection")
+    2. caused_by: Causal (e.g., "sepsis" caused_by "infection")
+    3. symptom_of: Diagnostic (e.g., "fever" symptom_of "infection")
+    4. treated_with: Therapeutic (e.g., "infection" treated_with "antibiotics")
+    5. co_occurs_with: Co-occurrence (learned from literature)
+    6. contradicts: Mutual exclusion (e.g., "acute" contradicts "chronic")
+    7. requires_test: Diagnostic procedure (e.g., "pneumonia" requires_test "chest")
+    8. risk_factor_for: Epidemiological (e.g., "diabetes" risk_factor_for "I50")
+    """
+    edges = defaultdict(list)
+    
+    # Define semantic mappings (simplified UMLS-inspired rules)
+    
+    # 1. is_a (hierarchical)
+    hierarchies = {
+        'infection': ['pneumonia', 'uti', 'cellulitis', 'sepsis', 'meningitis'],
+        'cardiovascular': ['cardiac', 'coronary', 'atrial fibrillation'],
+        'respiratory': ['pulmonary', 'dyspnea', 'hypoxia', 'copd', 'asthma'],
+        'renal': ['kidney', 'creatinine', 'dialysis', 'ckd'],
+        'metabolic': ['diabetes mellitus', 'hyperglycemia', 'hypoglycemia'],
+        'pain': ['chest', 'abdominal', 'headache']
+    }
+    
+    for parent, children in hierarchies.items():
+        if parent in concepts:
+            for child in children:
+                if child in concepts:
+                    edges['is_a'].append((child, parent, 1.0))
+    
+    # 2. caused_by (causal relationships)
+    causals = [
+        ('sepsis', 'infection'), ('shock', 'hypotension'),
+        ('respiratory failure', 'hypoxia'), ('acute kidney injury', 'hypotension'),
+        ('stroke', 'hypertension'), ('heart failure', 'hypertension')
+    ]
+    for effect, cause in causals:
+        if effect in concepts and cause in concepts:
+            edges['caused_by'].append((effect, cause, 0.9))
+    
+    # 3. symptom_of (diagnostic)
+    symptoms = [
+        ('fever', 'infection'), ('cough', 'pneumonia'), ('dyspnea', 'heart failure'),
+        ('chest', 'cardiac'), ('abdominal', 'gastrointestinal'),
+        ('confusion', 'sepsis'), ('edema', 'heart failure')
+    ]
+    for symptom, condition in symptoms:
+        if symptom in concepts and condition in concepts:
+            edges['symptom_of'].append((symptom, condition, 0.8))
+    
+    # 4. treated_with (therapeutic)
+    treatments = [
+        ('infection', 'antibiotics'), ('heart failure', 'diuretics'),
+        ('hypotension', 'vasopressors'), ('hyperglycemia', 'insulin'),
+        ('pneumonia', 'antibiotics'), ('sepsis', 'antibiotics')
+    ]
+    for condition, treatment in treatments:
+        if condition in concepts and treatment in concepts:
+            edges['treated_with'].append((condition, treatment, 0.85))
+    
+    # 5. co_occurs_with (from medical literature patterns)
+    cooccur = [
+        ('fever', 'leukocytosis'), ('dyspnea', 'tachypnea'),
+        ('chest', 'troponin'), ('sepsis', 'lactate'),
+        ('pneumonia', 'infiltrate'), ('heart failure', 'bnp')
+    ]
+    for c1, c2 in cooccur:
+        if c1 in concepts and c2 in concepts:
+            edges['co_occurs_with'].append((c1, c2, 0.7))
+            edges['co_occurs_with'].append((c2, c1, 0.7))  # Symmetric
+    
+    # 6. contradicts (mutual exclusion)
+    contradictions = [
+        ('acute', 'chronic'), ('mild', 'severe'),
+        ('hypotension', 'hypertension'), ('tachycardia', 'bradycardia'),
+        ('hyperglycemia', 'hypoglycemia'), ('left', 'right')
+    ]
+    for c1, c2 in contradictions:
+        if c1 in concepts and c2 in concepts:
+            edges['contradicts'].append((c1, c2, 0.95))
+            edges['contradicts'].append((c2, c1, 0.95))  # Symmetric
+    
+    # 7. requires_test (diagnostic procedures)
+    tests = [
+        ('pneumonia', 'xray'), ('pneumonia', 'chest'),
+        ('heart failure', 'echo'), ('cardiac', 'ekg'),
+        ('infection', 'cultures'), ('sepsis', 'lactate')
+    ]
+    for condition, test in tests:
+        if condition in concepts and test in concepts:
+            edges['requires_test'].append((condition, test, 0.75))
+    
+    # 8. risk_factor_for (epidemiological - concepts to diagnoses)
+    risk_factors = {
+        'I50': ['hypertension', 'diabetes mellitus', 'coronary artery disease'],  # Heart failure
+        'I10': ['obesity', 'diabetes mellitus'],  # Hypertension
+        'E11': ['obesity', 'hypertension'],  # Type 2 diabetes
+        'J44': ['copd', 'chronic'],  # COPD
+        'N18': ['diabetes mellitus', 'hypertension']  # CKD
+    }
+    
+    for dx_code, risk_concepts in risk_factors.items():
+        if dx_code in diagnoses:
+            for concept in risk_concepts:
+                if concept in concepts:
+                    edges['risk_factor_for'].append((concept, dx_code, 0.8))
+    
+    return edges
+
+
+def build_rich_knowledge_graph(top_50_codes, all_concepts):
+    """
+    Build comprehensive knowledge graph with:
+    - Diagnosis nodes
+    - Concept nodes
+    - 8 edge types with semantic relationships
+    - ICD-10 hierarchical structure
+    """
+    print("\n📊 Building rich knowledge graph...")
+    
+    G = nx.MultiDiGraph()
+    
+    # Add nodes with type labels
+    for code in top_50_codes:
+        G.add_node(code, node_type='diagnosis', icd_chapter=code[0])
+    
+    for concept in all_concepts:
+        G.add_node(concept, node_type='concept')
+    
+    print(f"   Added {len(top_50_codes)} diagnosis nodes")
+    print(f"   Added {len(all_concepts)} concept nodes")
+    
+    # Build ICD-10 hierarchy
+    hierarchy = build_icd10_hierarchy(top_50_codes)
+    
+    # Add hierarchical edges (diagnosis-diagnosis)
+    for chapter, block in hierarchy['chapter_to_block']:
+        if chapter in G and block in G:
+            G.add_edge(block, chapter, edge_type='is_a', weight=1.0)
+    
+    for block, code in hierarchy['block_to_code']:
+        if block in G and code in G:
+            G.add_edge(code, block, edge_type='is_a', weight=1.0)
+    
+    # Build semantic relationships
+    semantic_edges = build_umls_semantic_relationships(all_concepts, top_50_codes)
+    
+    # Add semantic edges
+    edge_counts = {}
+    for edge_type, edge_list in semantic_edges.items():
+        count = 0
+        for src, dst, weight in edge_list:
+            if src in G and dst in G:
+                G.add_edge(src, dst, edge_type=edge_type, weight=weight)
+                count += 1
+        edge_counts[edge_type] = count
+        print(f"   Added {count} '{edge_type}' edges")
+    
+    print(f"\n✅ Knowledge graph built:")
+    print(f"   Total nodes: {G.number_of_nodes()}")
+    print(f"   Total edges: {G.number_of_edges()}")
+    print(f"   Edge types: {len(semantic_edges)} types")
+    
+    return G, edge_counts
+
+
+# Build the graph
+ontology_graph, edge_type_counts = build_rich_knowledge_graph(TOP_50_CODES, ALL_CONCEPTS)
+
+# Save graph
+nx.write_gpickle(ontology_graph, CONCEPT_STORE_PATH / 'rich_knowledge_graph.gpickle')
+print(f"\n💾 Saved graph to: {CONCEPT_STORE_PATH / 'rich_knowledge_graph.gpickle'}")
+
+# ============================================================================
+# CONVERT TO PYTORCH GEOMETRIC HETERODATA
+# ============================================================================
+
+print("\n" + "="*80)
+print("🔄 CONVERTING TO PYTORCH GEOMETRIC FORMAT")
+print("="*80)
+
+def graph_to_heterodata(G, all_concepts, top_50_codes):
+    """
+    Convert NetworkX graph to PyTorch Geometric HeteroData
+    
+    Supports:
+    - Heterogeneous nodes (concept vs diagnosis)
+    - Multiple edge types
+    - Node features
+    """
+    data = HeteroData()
+    
+    # Node mappings
+    concept_to_idx = {c: i for i, c in enumerate(all_concepts)}
+    diagnosis_to_idx = {d: i for i, d in enumerate(top_50_codes)}
+    
+    # Node features (random initialization - will be learned)
+    num_concepts = len(all_concepts)
+    num_diagnoses = len(top_50_codes)
+    
+    data['concept'].x = torch.randn(num_concepts, GAT_HIDDEN_DIM)
+    data['diagnosis'].x = torch.randn(num_diagnoses, GAT_HIDDEN_DIM)
+    
+    # Edge indices by type
+    edge_dict = defaultdict(lambda: {'src': [], 'dst': []})
+    
+    for src, dst, edge_data in G.edges(data=True):
+        edge_type = edge_data.get('edge_type', 'unknown')
+        
+        # Determine node types
+        src_type = G.nodes[src].get('node_type', 'concept')
+        dst_type = G.nodes[dst].get('node_type', 'concept')
+        
+        # Map to indices
+        if src_type == 'concept' and dst_type == 'concept':
+            src_idx = concept_to_idx.get(src)
+            dst_idx = concept_to_idx.get(dst)
+            if src_idx is not None and dst_idx is not None:
+                edge_dict[('concept', edge_type, 'concept')]['src'].append(src_idx)
+                edge_dict[('concept', edge_type, 'concept')]['dst'].append(dst_idx)
+        
+        elif src_type == 'concept' and dst_type == 'diagnosis':
+            src_idx = concept_to_idx.get(src)
+            dst_idx = diagnosis_to_idx.get(dst)
+            if src_idx is not None and dst_idx is not None:
+                edge_dict[('concept', edge_type, 'diagnosis')]['src'].append(src_idx)
+                edge_dict[('concept', edge_type, 'diagnosis')]['dst'].append(dst_idx)
+        
+        elif src_type == 'diagnosis' and dst_type == 'concept':
+            src_idx = diagnosis_to_idx.get(src)
+            dst_idx = concept_to_idx.get(dst)
+            if src_idx is not None and dst_idx is not None:
+                edge_dict[('diagnosis', edge_type, 'concept')]['src'].append(src_idx)
+                edge_dict[('diagnosis', edge_type, 'concept')]['dst'].append(dst_idx)
+        
+        elif src_type == 'diagnosis' and dst_type == 'diagnosis':
+            src_idx = diagnosis_to_idx.get(src)
+            dst_idx = diagnosis_to_idx.get(dst)
+            if src_idx is not None and dst_idx is not None:
+                edge_dict[('diagnosis', edge_type, 'diagnosis')]['src'].append(src_idx)
+                edge_dict[('diagnosis', edge_type, 'diagnosis')]['dst'].append(dst_idx)
+    
+    # Add edges to HeteroData
+    for edge_key, indices in edge_dict.items():
+        if len(indices['src']) > 0:
+            data[edge_key].edge_index = torch.tensor(
+                [indices['src'], indices['dst']], 
+                dtype=torch.long
+            )
+    
+    return data, concept_to_idx, diagnosis_to_idx
+
+
+hetero_data, concept_to_idx, diagnosis_to_idx = graph_to_heterodata(
+    ontology_graph, ALL_CONCEPTS, TOP_50_CODES
+)
+
+print(f"✅ HeteroData created:")
+print(f"   Concept nodes: {hetero_data['concept'].x.shape}")
+print(f"   Diagnosis nodes: {hetero_data['diagnosis'].x.shape}")
+print(f"   Edge types: {len(hetero_data.edge_types)}")
+
+for edge_type in hetero_data.edge_types:
+    print(f"      {edge_type}: {hetero_data[edge_type].edge_index.shape[1]} edges")
+
+# ============================================================================
+# GAT ENCODER (PHASE B)
+# ============================================================================
+
+print("\n" + "="*80)
+print("🏗️  GAT ENCODER (PHASE B)")
+print("="*80)
+
+class HeteroGATEncoder(nn.Module):
+    """
+    Heterogeneous Graph Attention Network
+    
+    Features:
+    - Multi-head attention on edges
+    - Learnable edge importance
+    - Edge dropout for regularization
+    - Separate processing for concept/diagnosis nodes
+    """
+    def __init__(self, hidden_dim, num_heads=4, num_layers=2, dropout=0.3, edge_dropout=0.2):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.num_heads = num_heads
+        self.num_layers = num_layers
+        self.dropout = dropout
+        self.edge_dropout = edge_dropout
+        
+        # Concept node GAT layers
+        self.concept_convs = nn.ModuleList([
+            GATConv(hidden_dim, hidden_dim // num_heads, heads=num_heads, dropout=dropout, concat=True)
+            for _ in range(num_layers)
+        ])
+        
+        # Diagnosis node GAT layers  
+        self.diagnosis_convs = nn.ModuleList([
+            GATConv(hidden_dim, hidden_dim // num_heads, heads=num_heads, dropout=dropout, concat=True)
+            for _ in range(num_layers)
+        ])
+        
+        self.dropout_layer = nn.Dropout(dropout)
+        self.edge_dropout_layer = nn.Dropout(edge_dropout)
+    
+    def forward(self, x_concept, x_diagnosis, edge_index_concept, edge_index_diagnosis):
+        """
+        Forward pass through GAT layers
+        
+        Args:
+            x_concept: Concept node features [num_concepts, hidden_dim]
+            x_diagnosis: Diagnosis node features [num_diagnoses, hidden_dim]
+            edge_index_concept: Concept-concept edges [2, num_edges]
+            edge_index_diagnosis: Diagnosis-diagnosis edges [2, num_edges]
+        
+        Returns:
+            Updated node embeddings
+        """
+        # Process concept nodes
+        h_concept = x_concept
+        for i, conv in enumerate(self.concept_convs):
+            # Apply edge dropout during training
+            if self.training and edge_index_concept.shape[1] > 0:
+                mask = torch.rand(edge_index_concept.shape[1]) > self.edge_dropout
+                masked_edges = edge_index_concept[:, mask.to(edge_index_concept.device)]
+            else:
+                masked_edges = edge_index_concept
+            
+            if masked_edges.shape[1] > 0:
+                h_concept = conv(h_concept, masked_edges)
+                h_concept = F.elu(h_concept) if i < len(self.concept_convs) - 1 else h_concept
+                h_concept = self.dropout_layer(h_concept)
+        
+        # Process diagnosis nodes
+        h_diagnosis = x_diagnosis
+        for i, conv in enumerate(self.diagnosis_convs):
+            if self.training and edge_index_diagnosis.shape[1] > 0:
+                mask = torch.rand(edge_index_diagnosis.shape[1]) > self.edge_dropout
+                masked_edges = edge_index_diagnosis[:, mask.to(edge_index_diagnosis.device)]
+            else:
+                masked_edges = edge_index_diagnosis
+            
+            if masked_edges.shape[1] > 0:
+                h_diagnosis = conv(h_diagnosis, masked_edges)
+                h_diagnosis = F.elu(h_diagnosis) if i < len(self.diagnosis_convs) - 1 else h_diagnosis
+                h_diagnosis = self.dropout_layer(h_diagnosis)
+        
+        return h_concept, h_diagnosis
+
+
+print("✅ GAT Encoder defined")
+
+# ============================================================================
+# SHIFAMIND302 PHASE 2 MODEL
+# ============================================================================
+
+class ShifaMind302Phase2(nn.Module):
+    """
+    ShifaMind302 Phase 2: BERT + GAT + Rich Knowledge Graph
+    
+    Enhancements:
+    - GAT instead of GraphSAGE (better for heterogeneous graphs)
+    - Rich knowledge graph with 8 edge types
+    - Learnable edge weights via attention
+    - UMLS-enhanced concepts (263)
+    """
+    def __init__(self, base_model, gat_encoder, hetero_data, num_concepts, num_diagnoses, hidden_size=768):
+        super().__init__()
+        self.base_model = base_model
+        self.gat_encoder = gat_encoder
+        self.hidden_size = hidden_size
+        self.num_concepts = num_concepts
+        
+        # Store graph data
+        self.register_buffer('concept_node_features', hetero_data['concept'].x)
+        self.register_buffer('diagnosis_node_features', hetero_data['diagnosis'].x)
+        
+        # Extract concept-concept edges (primary for concept enhancement)
+        concept_edges = None
+        for edge_type in hetero_data.edge_types:
+            if edge_type[0] == 'concept' and edge_type[2] == 'concept':
+                if concept_edges is None:
+                    concept_edges = hetero_data[edge_type].edge_index
+                else:
+                    concept_edges = torch.cat([concept_edges, hetero_data[edge_type].edge_index], dim=1)
+        
+        diagnosis_edges = None
+        for edge_type in hetero_data.edge_types:
+            if edge_type[0] == 'diagnosis' and edge_type[2] == 'diagnosis':
+                if diagnosis_edges is None:
+                    diagnosis_edges = hetero_data[edge_type].edge_index
+                else:
+                    diagnosis_edges = torch.cat([diagnosis_edges, hetero_data[edge_type].edge_index], dim=1)
+        
+        self.register_buffer('concept_edges', concept_edges if concept_edges is not None else torch.zeros(2, 0, dtype=torch.long))
+        self.register_buffer('diagnosis_edges', diagnosis_edges if diagnosis_edges is not None else torch.zeros(2, 0, dtype=torch.long))
+        
+        # Fusion layers
+        self.concept_projection = nn.Sequential(
+            nn.Linear(GAT_HIDDEN_DIM, hidden_size),
+            nn.LayerNorm(hidden_size),
+            nn.ReLU(),
+            nn.Dropout(0.1)
+        )
+        
+        self.concept_head = nn.Linear(hidden_size, num_concepts)
+        self.diagnosis_head = nn.Linear(hidden_size, num_diagnoses)
+    
+    def forward(self, input_ids, attention_mask):
+        batch_size = input_ids.shape[0]
+        
+        # BERT encoding
+        outputs = self.base_model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=True,
+            return_dict=True
+        )
+        
+        cls_hidden = outputs.last_hidden_state[:, 0, :]  # [batch, 768]
+        
+        # GAT encoding of concept embeddings
+        gat_concept_emb, _ = self.gat_encoder(
+            self.concept_node_features,
+            self.diagnosis_node_features,
+            self.concept_edges,
+            self.diagnosis_edges
+        )
+        
+        # Project GAT embeddings to BERT space
+        enhanced_concepts = self.concept_projection(gat_concept_emb)  # [num_concepts, 768]
+        
+        # Concept attention (simplified - concept scores from enhanced embeddings)
+        concept_scores = torch.sigmoid(
+            torch.matmul(cls_hidden, enhanced_concepts.t())  # [batch, num_concepts]
+        ) / np.sqrt(self.hidden_size)
+        
+        # Weighted concept aggregation
+        concept_context = torch.matmul(concept_scores, enhanced_concepts)  # [batch, 768]
+        
+        # Fused representation
+        fused = cls_hidden + 0.3 * concept_context  # Weighted fusion
+        
+        # Predictions
+        diagnosis_logits = self.diagnosis_head(fused)
+        concept_logits = self.concept_head(fused)
+        
+        return {
+            'logits': diagnosis_logits,
+            'concept_logits': concept_logits,
+            'concept_scores': concept_scores,
+            'enhanced_concepts': enhanced_concepts
+        }
+
+
+print("✅ ShifaMind302 Phase 2 model defined")
+
+# ============================================================================
+# TRAINING SETUP
+# ============================================================================
+
+print("\n" + "="*80)
+print("⚙️  TRAINING SETUP")
+print("="*80)
+
+# Load Phase 1 checkpoint
+checkpoint = torch.load(PHASE1_CHECKPOINT, map_location='cpu', weights_only=False)
+
+# Initialize BioClinicalBERT
+tokenizer = AutoTokenizer.from_pretrained('emilyalsentzer/Bio_ClinicalBERT')
+base_model = AutoModel.from_pretrained('emilyalsentzer/Bio_ClinicalBERT').to(device)
+
+# Initialize GAT encoder
+gat_encoder = HeteroGATEncoder(
+    hidden_dim=GAT_HIDDEN_DIM,
+    num_heads=GAT_HEADS,
+    num_layers=GAT_LAYERS,
+    dropout=GAT_DROPOUT,
+    edge_dropout=EDGE_DROPOUT
+).to(device)
+
+# Move graph data to device
+hetero_data = hetero_data.to(device)
+
+# Initialize Phase 2 model
+model = ShifaMind302Phase2(
+    base_model=base_model,
+    gat_encoder=gat_encoder,
+    hetero_data=hetero_data,
+    num_concepts=len(ALL_CONCEPTS),
+    num_diagnoses=len(TOP_50_CODES),
+    hidden_size=768
+).to(device)
+
+# Load Phase 1 weights (BERT only)
+phase1_state = checkpoint['model_state_dict']
+bert_state = {k.replace('base_model.', ''): v for k, v in phase1_state.items() if 'base_model' in k}
+model.base_model.load_state_dict(bert_state, strict=False)
+
+print(f"✅ Loaded Phase 1 BERT weights")
+print(f"✅ Model initialized: {sum(p.numel() for p in model.parameters()):,} parameters")
+
+# Load data
+with open(SHARED_DATA_PATH / 'train_split.pkl', 'rb') as f:
+    df_train = pickle.load(f)
+with open(SHARED_DATA_PATH / 'val_split.pkl', 'rb') as f:
+    df_val = pickle.load(f)
+with open(SHARED_DATA_PATH / 'test_split.pkl', 'rb') as f:
+    df_test = pickle.load(f)
+
+train_concept_labels = np.load(SHARED_DATA_PATH / 'train_concept_labels.npy')
+val_concept_labels = np.load(SHARED_DATA_PATH / 'val_concept_labels.npy')
+test_concept_labels = np.load(SHARED_DATA_PATH / 'test_concept_labels.npy')
+
+print(f"\n✅ Loaded data splits:")
+print(f"   Train: {len(df_train):,}")
+print(f"   Val: {len(df_val):,}")
+print(f"   Test: {len(df_test):,}")
+
+# Dataset class (same as Phase 1)
+class ConceptDataset(Dataset):
+    def __init__(self, texts, labels, concept_labels, tokenizer, max_length=384):
+        self.texts = texts
+        self.labels = labels
+        self.concept_labels = concept_labels
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+    
+    def __len__(self):
+        return len(self.texts)
+    
+    def __getitem__(self, idx):
+        encoding = self.tokenizer(
+            str(self.texts[idx]),
+            padding='max_length',
+            truncation=True,
+            max_length=self.max_length,
+            return_tensors='pt'
+        )
+        
+        return {
+            'input_ids': encoding['input_ids'].flatten(),
+            'attention_mask': encoding['attention_mask'].flatten(),
+            'labels': torch.FloatTensor(self.labels[idx]),
+            'concept_labels': torch.FloatTensor(self.concept_labels[idx])
+        }
+
+# Create datasets
+train_dataset = ConceptDataset(
+    df_train['text'].tolist(),
+    df_train['labels'].tolist(),
+    train_concept_labels,
+    tokenizer
+)
+val_dataset = ConceptDataset(
+    df_val['text'].tolist(),
+    df_val['labels'].tolist(),
+    val_concept_labels,
+    tokenizer
+)
+test_dataset = ConceptDataset(
+    df_test['text'].tolist(),
+    df_test['labels'].tolist(),
+    test_concept_labels,
+    tokenizer
+)
+
+train_loader = DataLoader(
+    train_dataset,
+    batch_size=BATCH_SIZE_TRAIN,
+    shuffle=True,
+    pin_memory=PIN_MEMORY,
+    num_workers=NUM_WORKERS,
+    prefetch_factor=PREFETCH_FACTOR
+)
+val_loader = DataLoader(
+    val_dataset,
+    batch_size=BATCH_SIZE_VAL,
+    pin_memory=PIN_MEMORY,
+    num_workers=NUM_WORKERS,
+    prefetch_factor=PREFETCH_FACTOR
+)
+test_loader = DataLoader(
+    test_dataset,
+    batch_size=BATCH_SIZE_VAL,
+    pin_memory=PIN_MEMORY,
+    num_workers=NUM_WORKERS,
+    prefetch_factor=PREFETCH_FACTOR
+)
+
+# Loss function (same as Phase 1)
+class MultiObjectiveLoss(nn.Module):
+    def __init__(self, lambda_dx=1.0, lambda_align=0.5, lambda_concept=0.3):
+        super().__init__()
+        self.lambda_dx = lambda_dx
+        self.lambda_align = lambda_align
+        self.lambda_concept = lambda_concept
+        self.bce = nn.BCEWithLogitsLoss()
+    
+    def forward(self, outputs, dx_labels, concept_labels):
+        loss_dx = self.bce(outputs['logits'], dx_labels)
+        
+        dx_probs = torch.sigmoid(outputs['logits'])
+        concept_scores = outputs['concept_scores']
+        loss_align = torch.abs(
+            dx_probs.unsqueeze(-1) - concept_scores.unsqueeze(1)
+        ).mean()
+        
+        loss_concept = self.bce(outputs['concept_logits'], concept_labels)
+        
+        total_loss = (
+            self.lambda_dx * loss_dx +
+            self.lambda_align * loss_align +
+            self.lambda_concept * loss_concept
+        )
+        
+        return total_loss, {
+            'total': total_loss.item(),
+            'dx': loss_dx.item(),
+            'align': loss_align.item(),
+            'concept': loss_concept.item()
+        }
+
+criterion = MultiObjectiveLoss(LAMBDA_DX, LAMBDA_ALIGN, LAMBDA_CONCEPT)
+optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0.01)
+scheduler = get_linear_schedule_with_warmup(
+    optimizer,
+    num_warmup_steps=len(train_loader) // 2,
+    num_training_steps=len(train_loader) * EPOCHS
+)
+
+scaler = GradScaler() if USE_AMP else None
+
+print("✅ Training setup complete")
+
+# ============================================================================
+# TRAINING LOOP
+# ============================================================================
+
+print("\n" + "="*80)
+print("🏋️  TRAINING PHASE 2 (GAT + RICH KNOWLEDGE GRAPH)")
+print("="*80)
+
+best_f1 = 0.0
+history = {'train_loss': [], 'val_f1': []}
+
+for epoch in range(EPOCHS):
+    print(f"\n{'='*70}\nEpoch {epoch+1}/{EPOCHS}\n{'='*70}")
+    
+    # Training
+    model.train()
+    epoch_losses = defaultdict(list)
+    
+    for batch in tqdm(train_loader, desc="Training"):
+        input_ids = batch['input_ids'].to(device, non_blocking=True)
+        attention_mask = batch['attention_mask'].to(device, non_blocking=True)
+        dx_labels = batch['labels'].to(device, non_blocking=True)
+        concept_labels = batch['concept_labels'].to(device, non_blocking=True)
+        
+        optimizer.zero_grad()
+        
+        if USE_AMP:
+            with autocast():
+                outputs = model(input_ids, attention_mask)
+                loss, components = criterion(outputs, dx_labels, concept_labels)
+            
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            outputs = model(input_ids, attention_mask)
+            loss, components = criterion(outputs, dx_labels, concept_labels)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
+        
+        scheduler.step()
+        
+        for k, v in components.items():
+            epoch_losses[k].append(v)
+    
+    print(f"\n📊 Epoch {epoch+1} Losses:")
+    print(f"   Total:     {np.mean(epoch_losses['total']):.4f}")
+    print(f"   Diagnosis: {np.mean(epoch_losses['dx']):.4f}")
+    print(f"   Alignment: {np.mean(epoch_losses['align']):.4f}")
+    print(f"   Concept:   {np.mean(epoch_losses['concept']):.4f}")
+    
+    # Validation
+    model.eval()
+    all_preds, all_labels = [], []
+    
+    with torch.no_grad():
+        for batch in tqdm(val_loader, desc="Validating"):
+            input_ids = batch['input_ids'].to(device, non_blocking=True)
+            attention_mask = batch['attention_mask'].to(device, non_blocking=True)
+            dx_labels = batch['labels'].to(device, non_blocking=True)
+            
+            if USE_AMP:
+                with autocast():
+                    outputs = model(input_ids, attention_mask)
+            else:
+                outputs = model(input_ids, attention_mask)
+            
+            preds = (torch.sigmoid(outputs['logits']) > 0.5).cpu().numpy()
+            all_preds.append(preds)
+            all_labels.append(dx_labels.cpu().numpy())
+    
+    all_preds = np.vstack(all_preds)
+    all_labels = np.vstack(all_labels)
+    
+    val_f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
+    
+    print(f"\n📈 Validation:")
+    print(f"   Diagnosis F1: {val_f1:.4f}")
+    
+    history['train_loss'].append(np.mean(epoch_losses['total']))
+    history['val_f1'].append(val_f1)
+    
+    if val_f1 > best_f1:
+        best_f1 = val_f1
+        checkpoint = {
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'best_f1': best_f1,
+            'config': {
+                'num_concepts': len(ALL_CONCEPTS),
+                'num_diagnoses': len(TOP_50_CODES),
+                'gat_hidden_dim': GAT_HIDDEN_DIM,
+                'gat_heads': GAT_HEADS,
+                'gat_layers': GAT_LAYERS,
+                'edge_dropout': EDGE_DROPOUT,
+                'top_50_codes': TOP_50_CODES,
+                'timestamp': timestamp,
+                'use_amp': USE_AMP
+            }
+        }
+        torch.save(checkpoint, CHECKPOINT_PATH / 'phase2_best.pt')
+        print(f"   ✅ Saved best model (F1: {best_f1:.4f})")
+
+print(f"\n✅ Training complete! Best F1: {best_f1:.4f}")
+
+# ============================================================================
+# FINAL EVALUATION
+# ============================================================================
+
+print("\n" + "="*80)
+print("📊 FINAL TEST EVALUATION")
+print("="*80)
+
+checkpoint = torch.load(CHECKPOINT_PATH / 'phase2_best.pt', map_location=device, weights_only=False)
+model.load_state_dict(checkpoint['model_state_dict'])
+model.eval()
+
+all_preds, all_labels = [], []
+
+with torch.no_grad():
+    for batch in tqdm(test_loader, desc="Testing"):
+        input_ids = batch['input_ids'].to(device, non_blocking=True)
+        attention_mask = batch['attention_mask'].to(device, non_blocking=True)
+        dx_labels = batch['labels'].to(device, non_blocking=True)
+        
+        if USE_AMP:
+            with autocast():
+                outputs = model(input_ids, attention_mask)
+        else:
+            outputs = model(input_ids, attention_mask)
+        
+        preds = (torch.sigmoid(outputs['logits']) > 0.5).cpu().numpy()
+        all_preds.append(preds)
+        all_labels.append(dx_labels.cpu().numpy())
+
+all_preds = np.vstack(all_preds)
+all_labels = np.vstack(all_labels)
+
+macro_f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
+micro_f1 = f1_score(all_labels, all_preds, average='micro', zero_division=0)
+per_class_f1 = [
+    f1_score(all_labels[:, i], all_preds[:, i], zero_division=0)
+    for i in range(len(TOP_50_CODES))
+]
+
+print("\n" + "="*80)
+print("🎉 SHIFAMIND302 PHASE 2 - FINAL RESULTS")
+print("="*80)
+
+print("\n🎯 Diagnosis Performance (Top-50):")
+print(f"   Macro F1: {macro_f1:.4f}")
+print(f"   Micro F1: {micro_f1:.4f}")
+
+print(f"\n📊 Top-10 Best Performing Diagnoses:")
+top_10_best = sorted(zip(TOP_50_CODES, per_class_f1), key=lambda x: x[1], reverse=True)[:10]
+for rank, (code, f1) in enumerate(top_10_best, 1):
+    print(f"   {rank}. {code}: F1={f1:.4f}")
+
+# Save results
+results = {
+    'phase': 'ShifaMind302 Phase 2 - GAT + Rich Knowledge Graph',
+    'timestamp': timestamp,
+    'run_folder': str(OUTPUT_BASE),
+    'diagnosis_metrics': {
+        'macro_f1': float(macro_f1),
+        'micro_f1': float(micro_f1),
+        'per_class_f1': {code: float(f1) for code, f1 in zip(TOP_50_CODES, per_class_f1)}
+    },
+    'graph_architecture': {
+        'gnn_type': 'GAT',
+        'hidden_dim': GAT_HIDDEN_DIM,
+        'attention_heads': GAT_HEADS,
+        'layers': GAT_LAYERS,
+        'edge_dropout': EDGE_DROPOUT,
+        'num_edge_types': len(edge_type_counts),
+        'edge_type_counts': edge_type_counts
+    },
+    'training_history': history
+}
+
+with open(RESULTS_PATH / 'results.json', 'w') as f:
+    json.dump(results, f, indent=2)
+
+print(f"\n💾 Results saved to: {RESULTS_PATH / 'results.json'}")
+print(f"💾 Best model saved to: {CHECKPOINT_PATH / 'phase2_best.pt'}")
+
+print("\n" + "="*80)
+print("✅ SHIFAMIND302 PHASE 2 COMPLETE!")
+print("="*80)
+print(f"\n📍 Summary:")
+print(f"   ✅ GAT with {GAT_HEADS} attention heads")
+print(f"   ✅ Rich knowledge graph with {len(edge_type_counts)} edge types")
+print(f"   ✅ Learnable edge weights via attention")
+print(f"   ✅ Edge dropout: {EDGE_DROPOUT}")
+print(f"   ✅ Macro F1: {macro_f1:.4f} | Micro F1: {micro_f1:.4f}")
+print(f"\n📁 All artifacts saved to: {OUTPUT_BASE}")
+print(f"\nNext: Implement Phase 3 (RAG) with enhanced concepts and graph")
+print("\nAlhamdulillah! 🤲")
+
