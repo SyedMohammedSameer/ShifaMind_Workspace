@@ -1,41 +1,73 @@
-# ShifaMind302 Phase 1 Fix
+# ShifaMind302 Phase 1 - Evidence-Based Fix
 
-**Problem**: Phase 1 failed with -10% Macro F1 drop (0.28 → 0.25)
+**Problem**: Phase 1 failed (-10% Macro F1: 0.28 → 0.25)
 
-**Root causes**:
-- GPU never used (you confirmed)
-- AMP added without request
-- max_length truncated 512→384
-- UMLS over-extracted 99.58 concepts/sample
-- Too many concepts (263 vs 113)
+**Status**: Gathering evidence BEFORE making changes
 
 ---
 
-## Quick Start
+## Step 1: Run Rigorous Analysis (DO THIS FIRST)
 
-### 1. Run Analysis (10 min)
 ```bash
-python analyze_and_fix_phase1.py
+python rigorous_analysis.py
 ```
-Outputs: `/content/drive/MyDrive/ShifaMind/11_ShifaMind_v302/analysis/analysis_results.json`
 
-### 2. Run Fixed Version (6-8 hrs)
-Upload `shifamind302_phase1_FIXED.py` to Colab
-- Ensure GPU enabled (Runtime → GPU)
-- Run all cells
-- Expected: Macro F1 ≥ 0.28
+**Time**: 10-15 minutes
+
+**Outputs**:
+- Complete config comparison (proves if max_length, AMP differ)
+- Deep concept analysis (proves if UMLS over-extracted)
+- Concept-diagnosis correlation (proves which concepts are noise)
+- Top-50 code verification (proves if codes match)
+- Performance breakdown (proves where F1 dropped)
+
+**Evidence saved**: `/content/drive/MyDrive/ShifaMind/11_ShifaMind_v302/analysis/rigorous_evidence.json`
 
 ---
 
-## Fixes Applied
+## Step 2: Review Evidence & Decide
 
-| Issue | Fix |
-|-------|-----|
-| max_length 384 | → 512 |
-| AMP enabled | → Disabled |
-| 263 concepts | → 113 |
-| Batch 16/32 | → 8/16 |
-| UMLS no filter | → Strict (conf>0.7, semantic types) |
-| No GPU check | → Verification added |
+Read `rigorous_evidence.json` and identify PRIMARY issue:
 
-Expected: 15-25 concepts/sample (not 99.58), Macro F1 ≥ 0.28
+- **Hypothesis A**: UMLS over-extraction (99.58 concepts/sample)
+- **Hypothesis B**: Config changes (max_length, AMP)
+- **Hypothesis C**: Top-50 codes wrong
+- **Hypothesis D**: Multiple issues
+
+See `fix_strategy.md` for decision tree.
+
+---
+
+## Step 3: ONE Controlled Experiment
+
+Fix ONLY the primary issue, re-run Phase 1, measure.
+
+**NOT doing**: Changing 6 things at once (can't isolate cause)
+
+**DOING**: Change one variable, measure impact, iterate
+
+---
+
+## Current Files
+
+- `rigorous_analysis.py` - Evidence gathering (run first)
+- `fix_strategy.md` - Decision framework (read after analysis)
+- `shifamind302_phase1_FIXED.py` - Proposed fix (DON'T use until evidence reviewed)
+
+---
+
+## Why This Approach?
+
+Previous approach was rushed:
+- Made 6 changes without evidence
+- If it works, don't know which change mattered
+- If it fails, don't know which change broke it
+
+New approach:
+- Gather evidence first
+- Identify primary issue
+- Fix one thing
+- Measure impact
+- Learn and iterate
+
+**No more guessing. Evidence-based decisions only.**
