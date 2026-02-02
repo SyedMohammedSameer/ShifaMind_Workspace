@@ -23,44 +23,20 @@ print(f"\n301: {avg_301:.1f} concepts/sample")
 print(f"302: {avg_302:.1f} concepts/sample")
 print(f"⚠️  302 extracts {avg_302/avg_301:.1f}x more concepts")
 
-# Load diagnosis labels - just check what format it is
+# Load diagnosis labels
 with open(RUN_302 / 'shared_data' / 'train_split.pkl', 'rb') as f:
     data = pickle.load(f)
 
-print(f"\nPickle data type: {type(data)}")
-print(f"Pickle data keys/len: {data.keys() if isinstance(data, dict) else len(data) if hasattr(data, '__len__') else 'unknown'}")
-
-if isinstance(data, dict):
-    print(f"Dict keys: {list(data.keys())[:5]}")
-    first_key = list(data.keys())[0]
-    print(f"First item type: {type(data[first_key])}")
-    print(f"First item: {data[first_key]}")
-elif isinstance(data, list) and len(data) > 0:
-    print(f"List first item type: {type(data[0])}")
-    print(f"List first item: {data[0]}")
+# It's a DataFrame - extract label columns
+import pandas as pd
+if isinstance(data, pd.DataFrame):
+    # Get ICD code columns (skip 'text' and 'labels')
+    label_cols = [c for c in data.columns if c not in ['text', 'labels']]
+    dx_labels = data[label_cols].values
+    print(f"✅ Loaded from DataFrame: {dx_labels.shape}")
 else:
-    print(f"Data structure: {data}")
-
-# Try to get labels
-dx_labels = None
-
-try:
-    if isinstance(data, dict) and 'labels' in data:
-        dx_labels = np.array(data['labels'])
-    elif isinstance(data, list) and len(data) > 0:
-        if isinstance(data[0], dict) and 'labels' in data[0]:
-            dx_labels = np.array([s['labels'] for s in data])
-        elif hasattr(data[0], 'labels'):
-            dx_labels = np.array([s.labels for s in data])
-
-    if dx_labels is not None:
-        print(f"✅ Loaded labels: {dx_labels.shape}")
-    else:
-        print("❌ Could not extract labels - showing structure")
-        exit(0)
-except Exception as e:
-    print(f"❌ Error loading labels: {e}")
-    exit(0)
+    print(f"❌ Unexpected format: {type(data)}")
+    exit(1)
 
 # Correlation analysis
 print(f"\nAnalyzing {concepts_302.shape[1]} concepts vs {dx_labels.shape[1]} diagnoses...")
