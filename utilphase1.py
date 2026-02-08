@@ -26,9 +26,10 @@ import time
 import re
 
 print("="*80)
-print("🚀 SHIFAMIND PHASE A - WEEK 1 PILOT (REFINED)")
+print("🚀 SHIFAMIND PHASE A - WEEK 1 PILOT (v3 - AGGRESSIVE)")
 print("="*80)
-print("Version 2: Filtered concepts (removed ambiguous abbreviations & generic terms)")
+print("Version 3: Aggressive filtering - removed all history patterns & common terms")
+print("Target: 120-150 concepts, 8-12% density, <40% max frequency")
 
 # ============================================================================
 # DEPENDENCY CHECK & INSTALLATION
@@ -140,15 +141,17 @@ with open(SHARED_DATA_PATH / 'top50_icd10_info.json', 'r') as f:
 
 print(f"✅ Loaded {len(TOP_50_CODES)} ICD-10 codes")
 
-# REFINED ICD-10 clinical knowledge base (v2: removed ambiguous abbreviations)
-# Removed: 2-letter codes (mi, pe, pt, gi, ph, bp, etc.) and overly generic terms
+# REFINED ICD-10 clinical knowledge base (v3: aggressive filtering)
+# v3 changes: Removed ALL "history" patterns, high-frequency concepts (>50%),
+# generic symptoms (edema, fever, nausea, vomiting, chest pain),
+# generic procedures (blood transfusion, chest x-ray), location terms
 ICD10_CLINICAL_KNOWLEDGE = {
     # Cardiovascular (I codes)
-    'I10': ['hypertension', 'hypertensive', 'elevated blood pressure'],
+    'I10': ['hypertension', 'hypertensive'],
     'I110': ['hypertensive heart disease', 'left ventricular hypertrophy'],
     'I130': ['hypertensive heart kidney disease', 'hypertensive renal disease'],
     'I2510': ['atherosclerotic heart disease', 'coronary artery disease', 'atherosclerosis', 'angina'],
-    'I252': ['old myocardial infarction', 'prior myocardial infarction', 'history myocardial infarction'],
+    'I252': ['old myocardial infarction', 'prior myocardial infarction'],
     'I129': ['hypertensive chronic kidney disease', 'hypertensive renal disease'],
     'I480': ['atrial fibrillation', 'atrial flutter', 'irregular heart rhythm'],
     'I4891': ['heart failure', 'cardiac failure', 'congestive heart failure'],
@@ -164,15 +167,15 @@ ICD10_CLINICAL_KNOWLEDGE = {
     'E871': ['hyponatremia', 'low sodium'],
     'E872': ['metabolic acidosis', 'acidosis'],
 
-    # History/Status codes (Z codes)
-    'Z87891': ['nicotine dependence', 'tobacco use', 'smoking history'],
+    # History/Status codes (Z codes) - removed all "history" patterns
+    'Z87891': ['nicotine dependence', 'tobacco use'],
     'Z7901': ['long term aspirin use', 'aspirin therapy'],
     'Z794': ['long term medication use'],
     'Z7902': ['long term anticoagulant', 'warfarin therapy', 'anticoagulation therapy'],
     'Z955': ['coronary angioplasty status', 'coronary stent'],
     'Z951': ['cardiac pacemaker', 'permanent pacemaker'],
-    'Z8673': ['stroke history', 'cerebrovascular accident history'],
-    'Z86718': ['pulmonary embolism history', 'history pulmonary embolism'],
+    'Z8673': ['cerebrovascular accident'],
+    'Z86718': ['pulmonary embolism'],
     'Z66': ['body mass index', 'elevated body mass index'],
     'Z23': ['vaccination', 'immunization'],
 
@@ -205,13 +208,11 @@ ICD10_CLINICAL_KNOWLEDGE = {
 
     # Hematologic (D codes)
     'D649': ['anemia unspecified', 'low hemoglobin'],
-    'D62': ['acute blood loss anemia', 'hemorrhagic anemia'],
+    'D62': ['hemorrhagic anemia'],
     'D696': ['thrombocytopenia', 'low platelets'],
 
     # External causes (Y codes)
     'Y929': ['adverse drug effect', 'medication side effect'],
-    'Y92239': ['hospital location'],
-    'Y92230': ['hospital patient room'],
 }
 
 # Build comprehensive concept vocabulary
@@ -227,34 +228,33 @@ for code, concepts in ICD10_CLINICAL_KNOWLEDGE.items():
         candidate_concepts.add(concept_clean)
         diagnosis_to_concepts[code].append(concept_clean)
 
-# REFINED common clinical concepts (v2: removed generic terms and ambiguous abbreviations)
-# Removed: single-word generic terms (pain, blood, history, etc.) and 2-3 letter codes
+# REFINED common clinical concepts (v3: aggressive filtering)
+# Removed: history patterns, high-frequency concepts (>50%), generic symptoms/procedures
 COMMON_CLINICAL_CONCEPTS = [
     # Specific vital signs/symptoms (multi-word preferred)
     'hypotension', 'tachycardia', 'bradycardia', 'tachypnea',
-    'oxygen saturation', 'respiratory rate', 'elevated blood pressure',
-    'chest pain', 'abdominal pain', 'shortness of breath',
-    'altered mental status', 'weight loss',
+    'oxygen saturation', 'respiratory rate',
+    'shortness of breath', 'altered mental status', 'weight loss',
 
     # Specific lab findings (with context)
     'elevated creatinine', 'elevated glucose', 'low hemoglobin',
     'elevated troponin', 'elevated bilirubin',
     'low sodium', 'low potassium', 'elevated lactate',
-    'white blood cell count', 'platelet count',
+    'platelet count',
 
     # Specific imaging findings
     'pulmonary infiltrate', 'pulmonary consolidation', 'pleural effusion',
     'cardiomegaly', 'pulmonary edema', 'pulmonary opacity',
 
     # Specific diagnostic tests (full names)
-    'computed tomography', 'chest x-ray', 'echocardiogram',
+    'computed tomography', 'echocardiogram',
     'electrocardiogram', 'stress test', 'cardiac catheterization',
 
     # Specific treatments (multi-word)
     'antibiotic therapy', 'diuretic therapy', 'beta blocker',
     'ace inhibitor', 'insulin therapy', 'anticoagulation therapy',
     'antiplatelet therapy', 'supplemental oxygen', 'mechanical ventilation',
-    'hemodialysis', 'blood transfusion', 'intravenous fluids',
+    'hemodialysis', 'intravenous fluids',
 
     # Specific organ-related terms
     'cardiac disease', 'pulmonary disease', 'renal disease',
@@ -266,10 +266,10 @@ COMMON_CLINICAL_CONCEPTS = [
     'respiratory failure', 'renal failure', 'liver failure',
     'chronic disease', 'acute disease',
 
-    # Common clinical terms (specific)
-    'dyspnea', 'wheezing', 'cough', 'nausea', 'vomiting', 'diarrhea',
-    'fever', 'headache', 'dizziness', 'syncope', 'palpitations',
-    'edema', 'confusion', 'weakness', 'fatigue',
+    # Clinical terms (specific, non-generic)
+    'dyspnea', 'wheezing', 'cough', 'diarrhea',
+    'headache', 'dizziness', 'syncope', 'palpitations',
+    'confusion', 'weakness', 'fatigue',
     'hemorrhage', 'bleeding', 'thrombosis',
     'hypertension', 'hypotension',
 ]
