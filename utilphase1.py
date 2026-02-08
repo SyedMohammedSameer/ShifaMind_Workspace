@@ -26,8 +26,9 @@ import time
 import re
 
 print("="*80)
-print("🚀 SHIFAMIND PHASE A - WEEK 1 PILOT")
+print("🚀 SHIFAMIND PHASE A - WEEK 1 PILOT (REFINED)")
 print("="*80)
+print("Version 2: Filtered concepts (removed ambiguous abbreviations & generic terms)")
 
 # ============================================================================
 # DEPENDENCY CHECK & INSTALLATION
@@ -139,77 +140,78 @@ with open(SHARED_DATA_PATH / 'top50_icd10_info.json', 'r') as f:
 
 print(f"✅ Loaded {len(TOP_50_CODES)} ICD-10 codes")
 
-# Comprehensive ICD-10 clinical knowledge base
+# REFINED ICD-10 clinical knowledge base (v2: removed ambiguous abbreviations)
+# Removed: 2-letter codes (mi, pe, pt, gi, ph, bp, etc.) and overly generic terms
 ICD10_CLINICAL_KNOWLEDGE = {
     # Cardiovascular (I codes)
-    'I10': ['hypertension', 'blood pressure', 'elevated pressure', 'HTN', 'bp'],
-    'I110': ['hypertensive heart disease', 'heart disease', 'hypertension', 'cardiac', 'left ventricular hypertrophy'],
-    'I130': ['hypertensive heart kidney disease', 'renal', 'hypertension', 'ckd'],
-    'I2510': ['atherosclerotic heart disease', 'coronary artery disease', 'CAD', 'atherosclerosis', 'chest pain', 'angina'],
-    'I252': ['old myocardial infarction', 'mi', 'heart attack', 'infarction', 'history', 'prior mi'],
-    'I129': ['hypertensive chronic kidney disease', 'hypertension', 'ckd', 'renal disease'],
-    'I480': ['atrial fibrillation', 'afib', 'arrhythmia', 'irregular rhythm', 'palpitations', 'flutter'],
-    'I4891': ['heart failure', 'cardiac failure', 'dyspnea', 'edema', 'bnp', 'chf'],
-    'I5032': ['chronic heart failure', 'heart failure', 'hf', 'dyspnea', 'edema', 'reduced ejection fraction'],
+    'I10': ['hypertension', 'hypertensive', 'elevated blood pressure'],
+    'I110': ['hypertensive heart disease', 'left ventricular hypertrophy'],
+    'I130': ['hypertensive heart kidney disease', 'hypertensive renal disease'],
+    'I2510': ['atherosclerotic heart disease', 'coronary artery disease', 'atherosclerosis', 'angina'],
+    'I252': ['old myocardial infarction', 'prior myocardial infarction', 'history myocardial infarction'],
+    'I129': ['hypertensive chronic kidney disease', 'hypertensive renal disease'],
+    'I480': ['atrial fibrillation', 'atrial flutter', 'irregular heart rhythm'],
+    'I4891': ['heart failure', 'cardiac failure', 'congestive heart failure'],
+    'I5032': ['chronic heart failure', 'chronic systolic heart failure', 'reduced ejection fraction'],
 
     # Metabolic (E codes)
-    'E785': ['hyperlipidemia', 'cholesterol', 'triglycerides', 'lipid', 'statin', 'ldl', 'hdl'],
-    'E78': ['hyperlipidemia', 'cholesterol', 'dyslipidemia'],
-    'E039': ['hypothyroidism', 'thyroid', 'tsh', 'endocrine', 'levothyroxine'],
-    'E119': ['type 2 diabetes', 'diabetes', 'glucose', 'a1c', 'hyperglycemia', 'diabetic'],
-    'E1122': ['diabetic ckd', 'diabetes', 'kidney', 'nephropathy', 'renal'],
-    'E669': ['obesity', 'bmi', 'weight', 'overweight', 'obese'],
-    'E871': ['hyponatremia', 'sodium', 'electrolyte', 'low sodium'],
-    'E872': ['acidosis', 'ph', 'metabolic', 'bicarbonate'],
+    'E785': ['hyperlipidemia', 'high cholesterol', 'elevated cholesterol', 'dyslipidemia'],
+    'E78': ['hyperlipidemia', 'dyslipidemia'],
+    'E039': ['hypothyroidism', 'thyroid disorder', 'low thyroid'],
+    'E119': ['type 2 diabetes', 'diabetes mellitus', 'diabetes type 2', 'diabetic'],
+    'E1122': ['diabetic chronic kidney disease', 'diabetic nephropathy'],
+    'E669': ['obesity', 'morbid obesity', 'overweight'],
+    'E871': ['hyponatremia', 'low sodium'],
+    'E872': ['metabolic acidosis', 'acidosis'],
 
     # History/Status codes (Z codes)
-    'Z87891': ['nicotine dependence', 'smoking', 'tobacco', 'history', 'smoker'],
-    'Z7901': ['long term aspirin', 'aspirin', 'antiplatelet', 'medication', 'asa'],
-    'Z794': ['long term medication', 'chronic medication'],
-    'Z7902': ['long term anticoagulant', 'warfarin', 'anticoagulation', 'coumadin', 'eliquis'],
-    'Z955': ['coronary angioplasty', 'pci', 'stent', 'history', 'intervention'],
-    'Z951': ['cardiac pacemaker', 'pacemaker', 'device', 'pacer'],
-    'Z8673': ['cva history', 'stroke', 'history', 'cerebrovascular', 'tia'],
-    'Z86718': ['pulmonary embolism history', 'pe', 'history', 'embolism'],
-    'Z66': ['bmi', 'obesity', 'body mass index', 'weight'],
-    'Z23': ['vaccination', 'immunization', 'vaccine'],
+    'Z87891': ['nicotine dependence', 'tobacco use', 'smoking history'],
+    'Z7901': ['long term aspirin use', 'aspirin therapy'],
+    'Z794': ['long term medication use'],
+    'Z7902': ['long term anticoagulant', 'warfarin therapy', 'anticoagulation therapy'],
+    'Z955': ['coronary angioplasty status', 'coronary stent'],
+    'Z951': ['cardiac pacemaker', 'permanent pacemaker'],
+    'Z8673': ['stroke history', 'cerebrovascular accident history'],
+    'Z86718': ['pulmonary embolism history', 'history pulmonary embolism'],
+    'Z66': ['body mass index', 'elevated body mass index'],
+    'Z23': ['vaccination', 'immunization'],
 
     # GI (K codes)
-    'K219': ['gerd', 'reflux', 'heartburn', 'esophageal', 'gastric'],
-    'K5900': ['constipation', 'bowel', 'gastrointestinal', 'stool'],
+    'K219': ['gastroesophageal reflux', 'reflux disease', 'heartburn'],
+    'K5900': ['constipation', 'chronic constipation'],
 
     # Mental Health (F codes)
-    'F329': ['major depression', 'depression', 'depressed', 'mood disorder', 'psychiatric', 'mdd'],
-    'F419': ['anxiety', 'anxious', 'panic', 'psychiatric', 'gad'],
-    'F17210': ['nicotine dependence', 'smoking', 'tobacco', 'cigarettes'],
+    'F329': ['major depressive disorder', 'major depression', 'clinical depression'],
+    'F419': ['anxiety disorder', 'generalized anxiety'],
+    'F17210': ['nicotine dependence', 'tobacco dependence'],
 
     # Renal (N codes)
-    'N179': ['acute kidney injury', 'aki', 'renal failure', 'creatinine', 'kidney'],
-    'N183': ['chronic kidney disease', 'ckd', 'renal insufficiency', 'gfr', 'stage 3'],
-    'N189': ['chronic kidney disease', 'ckd', 'renal', 'kidney disease'],
-    'N390': ['urinary tract infection', 'uti', 'infection', 'urine', 'cystitis'],
-    'N400': ['benign prostatic hyperplasia', 'bph', 'prostate', 'urinary retention'],
+    'N179': ['acute kidney injury', 'acute renal failure'],
+    'N183': ['chronic kidney disease stage 3', 'chronic renal insufficiency'],
+    'N189': ['chronic kidney disease', 'chronic renal disease'],
+    'N390': ['urinary tract infection', 'bladder infection'],
+    'N400': ['benign prostatic hyperplasia', 'prostate enlargement'],
 
     # Respiratory (J codes)
-    'J45909': ['asthma', 'wheezing', 'dyspnea', 'bronchospasm', 'reactive airway'],
-    'J449': ['copd', 'emphysema', 'chronic bronchitis', 'dyspnea', 'chronic obstructive'],
-    'J9601': ['respiratory failure', 'hypoxia', 'ventilation', 'oxygen', 'hypoxemia'],
-    'J189': ['pneumonia', 'infiltrate', 'fever', 'cough', 'infection', 'consolidation'],
+    'J45909': ['asthma', 'bronchial asthma', 'reactive airway disease'],
+    'J449': ['chronic obstructive pulmonary disease', 'emphysema', 'chronic bronchitis'],
+    'J9601': ['acute respiratory failure', 'respiratory failure'],
+    'J189': ['pneumonia', 'bacterial pneumonia', 'pulmonary infiltrate'],
 
     # Neurologic (G codes)
-    'G4733': ['sleep apnea', 'osa', 'apnea', 'cpap', 'obstructive sleep'],
-    'G4700': ['sleep disorder', 'insomnia', 'sleep', 'sleep disturbance'],
-    'G8929': ['hemiplegia', 'paralysis', 'weakness', 'neurologic', 'stroke'],
+    'G4733': ['obstructive sleep apnea', 'sleep apnea syndrome'],
+    'G4700': ['insomnia', 'sleep disorder'],
+    'G8929': ['hemiplegia', 'paralysis'],
 
     # Hematologic (D codes)
-    'D649': ['anemia', 'hemoglobin', 'hematocrit', 'blood', 'hgb'],
-    'D62': ['acute blood loss anemia', 'anemia', 'hemorrhage', 'bleeding', 'blood loss'],
-    'D696': ['thrombocytopenia', 'platelet', 'bleeding', 'low platelets'],
+    'D649': ['anemia unspecified', 'low hemoglobin'],
+    'D62': ['acute blood loss anemia', 'hemorrhagic anemia'],
+    'D696': ['thrombocytopenia', 'low platelets'],
 
     # External causes (Y codes)
-    'Y929': ['adverse effect', 'medication', 'drug reaction', 'side effect'],
-    'Y92239': ['place of occurrence', 'hospital', 'location'],
-    'Y92230': ['patient room', 'hospital', 'room'],
+    'Y929': ['adverse drug effect', 'medication side effect'],
+    'Y92239': ['hospital location'],
+    'Y92230': ['hospital patient room'],
 }
 
 # Build comprehensive concept vocabulary
@@ -225,49 +227,51 @@ for code, concepts in ICD10_CLINICAL_KNOWLEDGE.items():
         candidate_concepts.add(concept_clean)
         diagnosis_to_concepts[code].append(concept_clean)
 
-# Add common clinical concepts
+# REFINED common clinical concepts (v2: removed generic terms and ambiguous abbreviations)
+# Removed: single-word generic terms (pain, blood, history, etc.) and 2-3 letter codes
 COMMON_CLINICAL_CONCEPTS = [
-    # Vital signs
-    'fever', 'temperature', 'hypotension', 'tachycardia', 'bradycardia',
-    'tachypnea', 'oxygen saturation', 'respiratory rate', 'heart rate', 'pulse',
-    'blood pressure', 'bp', 'systolic', 'diastolic',
+    # Specific vital signs/symptoms (multi-word preferred)
+    'hypotension', 'tachycardia', 'bradycardia', 'tachypnea',
+    'oxygen saturation', 'respiratory rate', 'elevated blood pressure',
+    'chest pain', 'abdominal pain', 'shortness of breath',
+    'altered mental status', 'weight loss',
 
-    # Symptoms
-    'pain', 'chest pain', 'abdominal pain', 'dyspnea', 'shortness of breath', 'sob',
-    'cough', 'nausea', 'vomiting', 'diarrhea', 'headache', 'dizziness',
-    'weakness', 'fatigue', 'malaise', 'weight loss', 'edema', 'swelling',
-    'confusion', 'altered mental status', 'syncope', 'palpitations',
+    # Specific lab findings (with context)
+    'elevated creatinine', 'elevated glucose', 'low hemoglobin',
+    'elevated troponin', 'elevated bilirubin',
+    'low sodium', 'low potassium', 'elevated lactate',
+    'white blood cell count', 'platelet count',
 
-    # Lab findings
-    'elevated', 'increased', 'decreased', 'creatinine', 'bun', 'glucose',
-    'hemoglobin', 'hematocrit', 'white blood cell', 'wbc', 'platelet',
-    'sodium', 'potassium', 'chloride', 'bicarbonate', 'calcium',
-    'troponin', 'bnp', 'nt-probnp', 'lactate', 'bilirubin', 'inr', 'pt', 'ptt',
-    'liver enzymes', 'ast', 'alt', 'alkaline phosphatase',
+    # Specific imaging findings
+    'pulmonary infiltrate', 'pulmonary consolidation', 'pleural effusion',
+    'cardiomegaly', 'pulmonary edema', 'pulmonary opacity',
 
-    # Imaging findings
-    'infiltrate', 'consolidation', 'effusion', 'cardiomegaly', 'pleural effusion',
-    'pulmonary edema', 'opacity', 'mass', 'nodule',
+    # Specific diagnostic tests (full names)
+    'computed tomography', 'chest x-ray', 'echocardiogram',
+    'electrocardiogram', 'stress test', 'cardiac catheterization',
 
-    # Diagnostic tests
-    'ct scan', 'mri', 'ultrasound', 'echocardiogram', 'echo', 'ekg', 'ecg',
-    'x-ray', 'chest x-ray', 'cxr', 'stress test', 'catheterization',
+    # Specific treatments (multi-word)
+    'antibiotic therapy', 'diuretic therapy', 'beta blocker',
+    'ace inhibitor', 'insulin therapy', 'anticoagulation therapy',
+    'antiplatelet therapy', 'supplemental oxygen', 'mechanical ventilation',
+    'hemodialysis', 'blood transfusion', 'intravenous fluids',
 
-    # Treatments
-    'antibiotics', 'diuretics', 'beta blocker', 'ace inhibitor', 'arb',
-    'insulin', 'anticoagulation', 'antiplatelet', 'oxygen', 'supplemental oxygen',
-    'ventilation', 'mechanical ventilation', 'intubation', 'dialysis',
-    'transfusion', 'blood transfusion', 'iv fluids', 'fluid resuscitation',
+    # Specific organ-related terms
+    'cardiac disease', 'pulmonary disease', 'renal disease',
+    'liver disease', 'cardiovascular disease', 'respiratory disease',
+    'kidney disease', 'heart disease',
 
-    # Organ systems
-    'cardiac', 'heart', 'pulmonary', 'lung', 'renal', 'kidney',
-    'hepatic', 'liver', 'gastrointestinal', 'gi', 'bowel',
-    'respiratory', 'cardiovascular', 'neurologic', 'brain',
+    # Specific conditions (full names)
+    'sepsis', 'septic shock', 'bacterial infection',
+    'respiratory failure', 'renal failure', 'liver failure',
+    'chronic disease', 'acute disease',
 
-    # Conditions/Processes
-    'infection', 'sepsis', 'septic', 'failure', 'insufficiency',
-    'disease', 'disorder', 'syndrome', 'chronic', 'acute',
-    'history', 'prior', 'previous', 'status post', 'post',
+    # Common clinical terms (specific)
+    'dyspnea', 'wheezing', 'cough', 'nausea', 'vomiting', 'diarrhea',
+    'fever', 'headache', 'dizziness', 'syncope', 'palpitations',
+    'edema', 'confusion', 'weakness', 'fatigue',
+    'hemorrhage', 'bleeding', 'thrombosis',
+    'hypertension', 'hypotension',
 ]
 
 for concept in COMMON_CLINICAL_CONCEPTS:
