@@ -26,10 +26,10 @@ import time
 import re
 
 print("="*80)
-print("🚀 SHIFAMIND PHASE A - WEEK 1 PILOT (v3 - AGGRESSIVE)")
+print("🚀 SHIFAMIND PHASE A - WEEK 1 PILOT (v4 - ULTRA AGGRESSIVE)")
 print("="*80)
-print("Version 3: Aggressive filtering - removed all history patterns & common terms")
-print("Target: 120-150 concepts, 8-12% density, <40% max frequency")
+print("Version 4: Ultra-aggressive filtering - removed >25% frequency concepts")
+print("Target: 100-120 concepts, 8-12% density, <30% max frequency")
 
 # ============================================================================
 # DEPENDENCY CHECK & INSTALLATION
@@ -141,19 +141,20 @@ with open(SHARED_DATA_PATH / 'top50_icd10_info.json', 'r') as f:
 
 print(f"✅ Loaded {len(TOP_50_CODES)} ICD-10 codes")
 
-# REFINED ICD-10 clinical knowledge base (v3: aggressive filtering)
-# v3 changes: Removed ALL "history" patterns, high-frequency concepts (>50%),
-# generic symptoms (edema, fever, nausea, vomiting, chest pain),
-# generic procedures (blood transfusion, chest x-ray), location terms
+# REFINED ICD-10 clinical knowledge base (v4: ultra-aggressive filtering)
+# v4 changes: Removed ALL concepts with >25% frequency from v3 results
+# Removed: hypertension, pulmonary edema, elevated lactate, cough, acute respiratory failure,
+# pulmonary infiltrate, elevated body mass index, morbid obesity, irregular heart rhythm,
+# reactive airway disease, shortness of breath, respiratory rate, clinical depression,
+# supplemental oxygen, diarrhea, elevated troponin, elevated creatinine, aspirin therapy
 ICD10_CLINICAL_KNOWLEDGE = {
-    # Cardiovascular (I codes)
-    'I10': ['hypertension', 'hypertensive'],
+    # Cardiovascular (I codes) - keep only specific diseases
     'I110': ['hypertensive heart disease', 'left ventricular hypertrophy'],
     'I130': ['hypertensive heart kidney disease', 'hypertensive renal disease'],
     'I2510': ['atherosclerotic heart disease', 'coronary artery disease', 'atherosclerosis', 'angina'],
-    'I252': ['old myocardial infarction', 'prior myocardial infarction'],
+    'I252': ['old myocardial infarction', 'prior myocardial infarction', 'myocardial infarction'],
     'I129': ['hypertensive chronic kidney disease', 'hypertensive renal disease'],
-    'I480': ['atrial fibrillation', 'atrial flutter', 'irregular heart rhythm'],
+    'I480': ['atrial fibrillation', 'atrial flutter'],
     'I4891': ['heart failure', 'cardiac failure', 'congestive heart failure'],
     'I5032': ['chronic heart failure', 'chronic systolic heart failure', 'reduced ejection fraction'],
 
@@ -163,43 +164,43 @@ ICD10_CLINICAL_KNOWLEDGE = {
     'E039': ['hypothyroidism', 'thyroid disorder', 'low thyroid'],
     'E119': ['type 2 diabetes', 'diabetes mellitus', 'diabetes type 2', 'diabetic'],
     'E1122': ['diabetic chronic kidney disease', 'diabetic nephropathy'],
-    'E669': ['obesity', 'morbid obesity', 'overweight'],
+    'E669': ['obesity'],
     'E871': ['hyponatremia', 'low sodium'],
     'E872': ['metabolic acidosis', 'acidosis'],
 
-    # History/Status codes (Z codes) - removed all "history" patterns
+    # History/Status codes (Z codes) - removed all "history" patterns and aspirin therapy
     'Z87891': ['nicotine dependence', 'tobacco use'],
-    'Z7901': ['long term aspirin use', 'aspirin therapy'],
+    'Z7901': ['long term aspirin use'],
     'Z794': ['long term medication use'],
     'Z7902': ['long term anticoagulant', 'warfarin therapy', 'anticoagulation therapy'],
     'Z955': ['coronary angioplasty status', 'coronary stent'],
     'Z951': ['cardiac pacemaker', 'permanent pacemaker'],
     'Z8673': ['cerebrovascular accident'],
     'Z86718': ['pulmonary embolism'],
-    'Z66': ['body mass index', 'elevated body mass index'],
+    'Z66': ['body mass index'],
     'Z23': ['vaccination', 'immunization'],
 
     # GI (K codes)
     'K219': ['gastroesophageal reflux', 'reflux disease', 'heartburn'],
     'K5900': ['constipation', 'chronic constipation'],
 
-    # Mental Health (F codes)
-    'F329': ['major depressive disorder', 'major depression', 'clinical depression'],
+    # Mental Health (F codes) - removed clinical depression
+    'F329': ['major depressive disorder'],
     'F419': ['anxiety disorder', 'generalized anxiety'],
     'F17210': ['nicotine dependence', 'tobacco dependence'],
 
-    # Renal (N codes)
+    # Renal (N codes) - removed chronic kidney disease stage 3
     'N179': ['acute kidney injury', 'acute renal failure'],
-    'N183': ['chronic kidney disease stage 3', 'chronic renal insufficiency'],
+    'N183': ['chronic renal insufficiency'],
     'N189': ['chronic kidney disease', 'chronic renal disease'],
     'N390': ['urinary tract infection', 'bladder infection'],
     'N400': ['benign prostatic hyperplasia', 'prostate enlargement'],
 
-    # Respiratory (J codes)
-    'J45909': ['asthma', 'bronchial asthma', 'reactive airway disease'],
+    # Respiratory (J codes) - removed reactive airway disease, acute respiratory failure, pulmonary infiltrate
+    'J45909': ['asthma', 'bronchial asthma'],
     'J449': ['chronic obstructive pulmonary disease', 'emphysema', 'chronic bronchitis'],
-    'J9601': ['acute respiratory failure', 'respiratory failure'],
-    'J189': ['pneumonia', 'bacterial pneumonia', 'pulmonary infiltrate'],
+    'J9601': ['respiratory failure'],
+    'J189': ['pneumonia', 'bacterial pneumonia'],
 
     # Neurologic (G codes)
     'G4733': ['obstructive sleep apnea', 'sleep apnea syndrome'],
@@ -228,33 +229,35 @@ for code, concepts in ICD10_CLINICAL_KNOWLEDGE.items():
         candidate_concepts.add(concept_clean)
         diagnosis_to_concepts[code].append(concept_clean)
 
-# REFINED common clinical concepts (v3: aggressive filtering)
-# Removed: history patterns, high-frequency concepts (>50%), generic symptoms/procedures
+# REFINED common clinical concepts (v4: ultra-aggressive filtering)
+# Removed: ALL concepts with >25% frequency from v3 pilot results
+# Specifically removed: respiratory rate, oxygen saturation, shortness of breath, elevated lactate,
+# elevated creatinine, elevated troponin, pulmonary infiltrate, pulmonary edema, supplemental oxygen,
+# intravenous fluids, cough, diarrhea, hypertension
 COMMON_CLINICAL_CONCEPTS = [
-    # Specific vital signs/symptoms (multi-word preferred)
+    # Specific vital signs (very selective)
     'hypotension', 'tachycardia', 'bradycardia', 'tachypnea',
-    'oxygen saturation', 'respiratory rate',
-    'shortness of breath', 'altered mental status', 'weight loss',
+    'altered mental status', 'weight loss',
 
-    # Specific lab findings (with context)
-    'elevated creatinine', 'elevated glucose', 'low hemoglobin',
-    'elevated troponin', 'elevated bilirubin',
-    'low sodium', 'low potassium', 'elevated lactate',
+    # Specific lab findings (selective, context-specific)
+    'elevated glucose', 'low hemoglobin',
+    'elevated bilirubin',
+    'low sodium', 'low potassium',
     'platelet count',
 
-    # Specific imaging findings
-    'pulmonary infiltrate', 'pulmonary consolidation', 'pleural effusion',
-    'cardiomegaly', 'pulmonary edema', 'pulmonary opacity',
+    # Specific imaging findings (selective)
+    'pulmonary consolidation', 'pleural effusion',
+    'cardiomegaly', 'pulmonary opacity',
 
-    # Specific diagnostic tests (full names)
+    # Specific diagnostic tests
     'computed tomography', 'echocardiogram',
     'electrocardiogram', 'stress test', 'cardiac catheterization',
 
-    # Specific treatments (multi-word)
+    # Specific treatments (selective, exclude common ones)
     'antibiotic therapy', 'diuretic therapy', 'beta blocker',
     'ace inhibitor', 'insulin therapy', 'anticoagulation therapy',
-    'antiplatelet therapy', 'supplemental oxygen', 'mechanical ventilation',
-    'hemodialysis', 'intravenous fluids',
+    'antiplatelet therapy', 'mechanical ventilation',
+    'hemodialysis',
 
     # Specific organ-related terms
     'cardiac disease', 'pulmonary disease', 'renal disease',
@@ -266,12 +269,11 @@ COMMON_CLINICAL_CONCEPTS = [
     'respiratory failure', 'renal failure', 'liver failure',
     'chronic disease', 'acute disease',
 
-    # Clinical terms (specific, non-generic)
-    'dyspnea', 'wheezing', 'cough', 'diarrhea',
+    # Clinical terms (highly specific only)
+    'dyspnea', 'wheezing',
     'headache', 'dizziness', 'syncope', 'palpitations',
     'confusion', 'weakness', 'fatigue',
     'hemorrhage', 'bleeding', 'thrombosis',
-    'hypertension', 'hypotension',
 ]
 
 for concept in COMMON_CLINICAL_CONCEPTS:
