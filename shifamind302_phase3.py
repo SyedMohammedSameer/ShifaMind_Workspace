@@ -380,7 +380,7 @@ if not graph_data_path.exists():
     print(f"❌ Graph data not found at: {graph_data_path}")
     sys.exit(1)
 
-graph_data = torch.load(graph_data_path, map_location='cpu')
+graph_data = torch.load(graph_data_path, map_location='cpu', weights_only=False)
 print(f"✅ Loaded graph data:")
 print(f"   Nodes: {graph_data.x.shape[0]}")
 print(f"   Features: {graph_data.x.shape[1]}")
