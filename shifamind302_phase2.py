@@ -577,7 +577,15 @@ class ShifaMind302Phase2(nn.Module):
         # Project graph embeddings to BERT dimension
         self.graph_proj = nn.Linear(self.graph_hidden, self.hidden_size)
 
-        # Cross-attention: text attends to graph concepts
+        # Concept fusion: combine BERT + GAT embeddings (like v301)
+        self.concept_fusion = nn.Sequential(
+            nn.Linear(self.hidden_size + self.hidden_size, self.hidden_size),
+            nn.LayerNorm(self.hidden_size),
+            nn.ReLU(),
+            nn.Dropout(0.3)
+        )
+
+        # Cross-attention: text attends to enhanced concepts
         self.cross_attention = nn.MultiheadAttention(
             embed_dim=self.hidden_size,
             num_heads=8,
@@ -622,7 +630,15 @@ class ShifaMind302Phase2(nn.Module):
 
         return concept_embeds
 
-    def forward(self, input_ids, attention_mask):
+    def forward(self, input_ids, attention_mask, concept_embeddings_bert):
+        """
+        Forward pass with BERT + GAT fusion (matching v301 architecture)
+
+        Args:
+            input_ids: [batch, seq_len]
+            attention_mask: [batch, seq_len]
+            concept_embeddings_bert: [num_concepts, 768] - learned BERT concept embeddings
+        """
         batch_size = input_ids.shape[0]
 
         # 1. Encode text with BERT
@@ -630,18 +646,24 @@ class ShifaMind302Phase2(nn.Module):
         hidden_states = outputs.last_hidden_state  # [batch, seq_len, 768]
 
         # 2. Get GAT-enhanced concept embeddings
-        graph_concepts = self.get_graph_concept_embeddings()  # [num_concepts, 768]
-        graph_concepts = graph_concepts.unsqueeze(0).expand(batch_size, -1, -1)  # [batch, num_concepts, 768]
+        gat_concepts = self.get_graph_concept_embeddings()  # [num_concepts, 768]
 
-        # 3. Cross-attention: text attends to graph concepts
+        # 3. Fuse BERT + GAT concept embeddings (CRITICAL: matches v301!)
+        bert_concepts = concept_embeddings_bert.unsqueeze(0).expand(batch_size, -1, -1)
+        gat_concepts_batched = gat_concepts.unsqueeze(0).expand(batch_size, -1, -1)
+
+        fused_input = torch.cat([bert_concepts, gat_concepts_batched], dim=-1)  # [batch, num_concepts, 1536]
+        enhanced_concepts = self.concept_fusion(fused_input)  # [batch, num_concepts, 768]
+
+        # 4. Cross-attention: text attends to enhanced concepts
         context, attn_weights = self.cross_attention(
             query=hidden_states,
-            key=graph_concepts,
-            value=graph_concepts,
+            key=enhanced_concepts,
+            value=enhanced_concepts,
             need_weights=True
         )  # context: [batch, seq_len, 768]
 
-        # 4. Multiplicative bottleneck gating
+        # 5. Multiplicative bottleneck gating
         pooled_text = hidden_states.mean(dim=1)  # [batch, 768]
         pooled_context = context.mean(dim=1)  # [batch, 768]
 
@@ -651,16 +673,19 @@ class ShifaMind302Phase2(nn.Module):
         bottleneck_output = gate * pooled_context
         bottleneck_output = self.layer_norm(bottleneck_output)
 
-        # 5. Output heads
+        # 6. Output heads (matches v301 architecture)
         cls_hidden = self.dropout(pooled_text)
-        concept_scores = torch.sigmoid(self.concept_head(cls_hidden))
+        concept_logits = self.concept_head(cls_hidden)
+        concept_scores = torch.sigmoid(concept_logits)
         diagnosis_logits = self.diagnosis_head(bottleneck_output)
 
         return {
             'logits': diagnosis_logits,
+            'concept_logits': concept_logits,
             'concept_scores': concept_scores,
             'gate_values': gate,
-            'attention_weights': attn_weights
+            'attention_weights': attn_weights,
+            'bottleneck_output': bottleneck_output
         }
 
 # Build model
@@ -680,6 +705,13 @@ print(f"   Total parameters: {total_params:,}")
 print(f"   Trainable parameters: {trainable_params:,}")
 print(f"   BERT: {sum(p.numel() for p in model.bert.parameters()):,}")
 print(f"   GAT: {sum(p.numel() for p in model.gat.parameters()):,}")
+
+# Create concept embedding layer (matches v301 Phase 2)
+# This provides learnable BERT-based concept representations
+concept_embedding_layer = nn.Embedding(NUM_CONCEPTS, 768).to(device)
+
+print(f"\n✅ Concept embedding layer created:")
+print(f"   Parameters: {sum(p.numel() for p in concept_embedding_layer.parameters()):,}")
 
 # ============================================================================
 # LOAD PHASE 1 CHECKPOINT (TRANSFER LEARNING)
@@ -804,9 +836,8 @@ class MultiObjectiveLoss(nn.Module):
             dx_probs.unsqueeze(-1) - concept_scores.unsqueeze(1)
         ).mean()
 
-        # 3. Concept loss
-        concept_logits = torch.logit(concept_scores.clamp(1e-7, 1-1e-7))
-        loss_concept = self.bce(concept_logits, concept_labels)
+        # 3. Concept loss (use concept_logits directly)
+        loss_concept = self.bce(outputs['concept_logits'], concept_labels)
 
         total_loss = (
             self.lambda_dx * loss_dx +
@@ -822,7 +853,13 @@ class MultiObjectiveLoss(nn.Module):
         }
 
 criterion = MultiObjectiveLoss(LAMBDA_DX, LAMBDA_ALIGN, LAMBDA_CONCEPT)
-optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0.01)
+
+# Optimizer includes both model and concept embedding layer
+optimizer = torch.optim.AdamW(
+    list(model.parameters()) + list(concept_embedding_layer.parameters()),
+    lr=LEARNING_RATE,
+    weight_decay=0.01
+)
 
 scheduler = get_linear_schedule_with_warmup(
     optimizer,
@@ -843,7 +880,7 @@ print("\n" + "="*80)
 print("🚀 TRAINING")
 print("="*80)
 
-def evaluate(model, dataloader, criterion, device):
+def evaluate(model, dataloader, criterion, device, concept_embeddings):
     """Evaluate model"""
     model.eval()
 
@@ -862,7 +899,7 @@ def evaluate(model, dataloader, criterion, device):
             dx_labels = batch['labels'].to(device)
             concept_labels = batch['concept_labels'].to(device)
 
-            outputs = model(input_ids, attention_mask)
+            outputs = model(input_ids, attention_mask, concept_embeddings)
             loss, components = criterion(outputs, dx_labels, concept_labels)
 
             total_loss += loss.item()
@@ -904,6 +941,9 @@ history = {
 best_f1 = 0
 best_epoch = 0
 
+# Extract concept embeddings (matches v301 Phase 2)
+concept_embeddings = concept_embedding_layer.weight.detach()
+
 print(f"\n{'='*80}")
 print(f"Starting training for {NUM_EPOCHS} epochs...")
 print(f"{'='*80}\n")
@@ -924,7 +964,7 @@ for epoch in range(NUM_EPOCHS):
 
         optimizer.zero_grad()
 
-        outputs = model(input_ids, attention_mask)
+        outputs = model(input_ids, attention_mask, concept_embeddings)
         loss, components = criterion(outputs, dx_labels, concept_labels)
 
         loss.backward()
@@ -952,7 +992,7 @@ for epoch in range(NUM_EPOCHS):
 
     # Validation
     print(f"\n   Validating...")
-    val_metrics = evaluate(model, val_loader, criterion, device)
+    val_metrics = evaluate(model, val_loader, criterion, device, concept_embeddings)
 
     print(f"\n📈 Validation:")
     print(f"   Diagnosis F1: {val_metrics['dx_f1']:.4f}")
@@ -971,6 +1011,7 @@ for epoch in range(NUM_EPOCHS):
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
+            'concept_embeddings': concept_embeddings,
             'val_dx_f1': val_metrics['dx_f1'],
             'val_metrics': val_metrics,
             'config': {
@@ -978,7 +1019,8 @@ for epoch in range(NUM_EPOCHS):
                 'num_diagnoses': NUM_LABELS,
                 'graph_hidden_dim': GRAPH_HIDDEN_DIM,
                 'gat_heads': GAT_HEADS,
-                'gat_layers': GAT_LAYERS
+                'gat_layers': GAT_LAYERS,
+                'top_50_codes': TOP_50_CODES
             }
         }, MODELS_PATH / 'phase2_best.pt')
         print(f"   ✅ Saved best model (F1: {best_f1:.4f})")
@@ -1017,7 +1059,7 @@ with torch.no_grad():
         dx_labels = batch['labels'].to(device)
         concept_labels = batch['concept_labels'].to(device)
 
-        outputs = model(input_ids, attention_mask)
+        outputs = model(input_ids, attention_mask, concept_embeddings)
 
         all_dx_preds.append(torch.sigmoid(outputs['logits']).cpu().numpy())
         all_dx_labels.append(dx_labels.cpu().numpy())
