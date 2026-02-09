@@ -682,6 +682,42 @@ print(f"   BERT: {sum(p.numel() for p in model.bert.parameters()):,}")
 print(f"   GAT: {sum(p.numel() for p in model.gat.parameters()):,}")
 
 # ============================================================================
+# LOAD PHASE 1 CHECKPOINT (TRANSFER LEARNING)
+# ============================================================================
+
+print("\n" + "="*80)
+print("📥 LOADING PHASE 1 CHECKPOINT")
+print("="*80)
+
+# Find Phase 1 checkpoint from v301
+PHASE1_CHECKPOINT = run_folders[0] / 'checkpoints' / 'phase1' / 'phase1_best.pt'
+
+if PHASE1_CHECKPOINT.exists():
+    print(f"📁 Loading from: {PHASE1_CHECKPOINT}")
+
+    try:
+        checkpoint = torch.load(PHASE1_CHECKPOINT, map_location=device, weights_only=False)
+
+        # Load weights with strict=False (partial loading)
+        # This loads compatible layers (BERT, concept_head, diagnosis_head)
+        # and skips incompatible ones (GAT, graph-specific layers)
+        model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+
+        print("✅ Loaded Phase 1 weights (partial transfer learning)")
+        print("   - BERT encoder: ✅ Transferred")
+        print("   - Concept head: ✅ Transferred")
+        print("   - Diagnosis head: ✅ Transferred")
+        print("   - GAT encoder: ⚠️  New (will be trained from scratch)")
+        print("   - Graph projection: ⚠️  New (will be trained from scratch)")
+
+    except Exception as e:
+        print(f"⚠️  Could not load Phase 1 weights: {e}")
+        print("   Training from scratch (BioClinicalBERT pretrained only)")
+else:
+    print(f"⚠️  Phase 1 checkpoint not found at: {PHASE1_CHECKPOINT}")
+    print("   Training from scratch (BioClinicalBERT pretrained only)")
+
+# ============================================================================
 # DATASET AND TRAINING SETUP
 # ============================================================================
 
