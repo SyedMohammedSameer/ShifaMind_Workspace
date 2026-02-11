@@ -48,6 +48,17 @@ from sklearn.metrics import f1_score
 from transformers import AutoTokenizer, AutoModel
 from sentence_transformers import SentenceTransformer
 
+# Import v301's EXACT Phase 1 class
+import sys
+sys.path.insert(0, str(Path(__file__).parent))
+try:
+    from shifamindextra import ShifaMind2Phase1 as ShifaMind2Phase1_v301
+    USE_V301_CLASS = True
+    print("✅ Imported ShifaMind2Phase1 from shifamindextra.py")
+except ImportError:
+    USE_V301_CLASS = False
+    print("⚠️  Could not import from shifamindextra.py, using local class")
+
 try:
     import faiss
     FAISS_AVAILABLE = True
@@ -705,7 +716,11 @@ def phase_5_1_load_v302_checkpoints():
         bert_weight_before = base_model.embeddings.word_embeddings.weight[0, :5].clone()
         print(f"   🔍 DEBUG: BERT embeddings before loading (first 5 values): {bert_weight_before.cpu()}")
 
-        model_p1 = ShifaMind2Phase1(base_model, NUM_CONCEPTS, NUM_DIAGNOSES).to(device)
+        # Use v301's EXACT class if available
+        Phase1Class = ShifaMind2Phase1_v301 if USE_V301_CLASS else ShifaMind2Phase1
+        model_p1 = Phase1Class(base_model, NUM_CONCEPTS, NUM_DIAGNOSES).to(device)
+        if USE_V301_CLASS:
+            print(f"   ✅ Using v301's EXACT ShifaMind2Phase1 class from shifamindextra.py")
 
         checkpoint = torch.load(phase1_checkpoint_path, map_location=device, weights_only=False)
 
