@@ -326,7 +326,7 @@ class ConceptBottleneckCrossAttention(nn.Module):
         return output, attn_weights.mean(dim=1), gate.mean()
 
 class ShifaMind302Phase1(nn.Module):
-    """Phase 1: Concept Bottleneck only (no GAT, no RAG)"""
+    """Phase 1: Concept Bottleneck only (EXACT v301 architecture)"""
     def __init__(self, base_model, num_concepts, num_classes, fusion_layers=[9, 11]):
         super().__init__()
         self.base_model = base_model
@@ -347,7 +347,7 @@ class ShifaMind302Phase1(nn.Module):
         self.diagnosis_head = nn.Linear(self.hidden_size, num_classes)
         self.dropout = nn.Dropout(0.1)
 
-    def forward(self, input_ids, attention_mask, concept_embeddings_external=None, input_texts=None):
+    def forward(self, input_ids, attention_mask, return_attention=False):
         outputs = self.base_model(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -358,6 +358,9 @@ class ShifaMind302Phase1(nn.Module):
         hidden_states = outputs.hidden_states
         current_hidden = outputs.last_hidden_state
 
+        attention_maps = {}
+        gate_values = []
+
         for layer_idx in self.fusion_layers:
             if str(layer_idx) in self.fusion_modules:
                 layer_hidden = hidden_states[layer_idx]
@@ -365,15 +368,27 @@ class ShifaMind302Phase1(nn.Module):
                     layer_hidden, self.concept_embeddings, attention_mask
                 )
                 current_hidden = fused_hidden
+                gate_values.append(gate.item())
+
+                if return_attention:
+                    attention_maps[f'layer_{layer_idx}'] = attn
 
         cls_hidden = self.dropout(current_hidden[:, 0, :])
         concept_scores = torch.sigmoid(self.concept_head(cls_hidden))
         diagnosis_logits = self.diagnosis_head(cls_hidden)
 
-        return {
+        result = {
             'logits': diagnosis_logits,
-            'concept_scores': concept_scores
+            'concept_scores': concept_scores,
+            'hidden_states': current_hidden,
+            'cls_hidden': cls_hidden,
+            'avg_gate': np.mean(gate_values) if gate_values else 0.0
         }
+
+        if return_attention:
+            result['attention_maps'] = attention_maps
+
+        return result
 
 class ShifaMind302Phase2(nn.Module):
     """Phase 2: Concept Bottleneck + GAT (no RAG)"""
