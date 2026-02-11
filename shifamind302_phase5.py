@@ -884,7 +884,10 @@ def phase_5_2_evaluate_v302_with_tuning(models_dict):
                 attention_mask = batch['attention_mask'].to(device)
                 labels = batch['labels']
 
-                if has_rag:
+                if phase_name == 'phase1':
+                    # Phase 1 doesn't accept concept_embeddings parameter
+                    outputs = model(input_ids, attention_mask)
+                elif has_rag:
                     texts = batch['text']
                     outputs = model(input_ids, attention_mask, concept_embeddings, input_texts=texts)
                 else:
@@ -913,7 +916,10 @@ def phase_5_2_evaluate_v302_with_tuning(models_dict):
                 attention_mask = batch['attention_mask'].to(device)
                 labels = batch['labels']
 
-                if has_rag:
+                if phase_name == 'phase1':
+                    # Phase 1 doesn't accept concept_embeddings parameter
+                    outputs = model(input_ids, attention_mask)
+                elif has_rag:
                     texts = batch['text']
                     outputs = model(input_ids, attention_mask, concept_embeddings, input_texts=texts)
                 else:
