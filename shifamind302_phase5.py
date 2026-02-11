@@ -693,7 +693,23 @@ def phase_5_1_load_v302_checkpoints():
         model_p1 = ShifaMind302Phase1(base_model, NUM_CONCEPTS, NUM_DIAGNOSES).to(device)
 
         checkpoint = torch.load(phase1_checkpoint_path, map_location=device, weights_only=False)
-        model_p1.load_state_dict(checkpoint['model_state_dict'], strict=False)
+
+        # DEBUG: Print checkpoint keys to verify structure
+        print(f"   🔍 Checkpoint keys: {list(checkpoint.keys())}")
+        if 'model_state_dict' in checkpoint:
+            state_dict = checkpoint['model_state_dict']
+            print(f"   🔍 Sample model_state_dict keys:")
+            for i, key in enumerate(list(state_dict.keys())[:10]):
+                print(f"      {i+1}. {key}")
+
+            # Check if weights actually loaded
+            incompatible = model_p1.load_state_dict(state_dict, strict=False)
+            if incompatible.missing_keys:
+                print(f"   ⚠️  Missing keys: {len(incompatible.missing_keys)}")
+                print(f"      First 5: {incompatible.missing_keys[:5]}")
+            if incompatible.unexpected_keys:
+                print(f"   ⚠️  Unexpected keys: {len(incompatible.unexpected_keys)}")
+                print(f"      First 5: {incompatible.unexpected_keys[:5]}")
 
         concept_embeddings_p1 = model_p1.concept_embeddings.detach()
         model_p1.eval()
