@@ -704,14 +704,31 @@ def phase_5_1_load_v302_checkpoints():
 
         checkpoint = torch.load(phase1_checkpoint_path, map_location=device, weights_only=False)
 
+        # DEBUG: Check if concept_embeddings exists in checkpoint
+        print(f"   🔍 DEBUG: 'concept_embeddings' in checkpoint: {'concept_embeddings' in checkpoint}")
+        print(f"   🔍 DEBUG: 'concept_embeddings' in model_state_dict: {'concept_embeddings' in checkpoint['model_state_dict']}")
+
+        # Get concept_embeddings from checkpoint (before fixing keys)
+        checkpoint_concept_emb = checkpoint['model_state_dict']['concept_embeddings']
+        print(f"   🔍 DEBUG: Checkpoint concept_embeddings shape: {checkpoint_concept_emb.shape}")
+        print(f"   🔍 DEBUG: Checkpoint concept_embeddings mean: {checkpoint_concept_emb.mean():.6f}")
+        print(f"   🔍 DEBUG: Checkpoint concept_embeddings std: {checkpoint_concept_emb.std():.6f}")
+
         # Fix key names from checkpoint (keep base_model.* and include concept_embeddings for Phase 1)
         fixed_state_dict = fix_checkpoint_keys(checkpoint['model_state_dict'],
                                                 rename_base_to_bert=False,
                                                 skip_concept_embeddings=False)
+
+        # DEBUG: Check if concept_embeddings is in fixed_state_dict
+        print(f"   🔍 DEBUG: 'concept_embeddings' in fixed_state_dict: {'concept_embeddings' in fixed_state_dict}")
+
         model_p1.load_state_dict(fixed_state_dict)
 
         # Get concept embeddings from the loaded model
         concept_embeddings_p1 = model_p1.concept_embeddings.detach()
+        print(f"   🔍 DEBUG: Model concept_embeddings shape: {concept_embeddings_p1.shape}")
+        print(f"   🔍 DEBUG: Model concept_embeddings mean: {concept_embeddings_p1.mean():.6f}")
+        print(f"   🔍 DEBUG: Model concept_embeddings std: {concept_embeddings_p1.std():.6f}")
         model_p1.eval()
 
         models_dict['phase1'] = (model_p1, concept_embeddings_p1, None, None)
