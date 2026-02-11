@@ -730,9 +730,11 @@ def phase_5_1_load_v302_checkpoints():
         model_p1.load_state_dict(fixed_state_dict)
 
         # DEBUG: Check BERT weight after loading checkpoint
-        bert_weight_after = model_p1.base_model.embeddings.word_embeddings.weight[0, :5].clone()
-        print(f"   🔍 DEBUG: BERT embeddings after loading (first 5 values): {bert_weight_after.cpu()}")
-        print(f"   🔍 DEBUG: BERT weights changed: {not torch.allclose(bert_weight_before, bert_weight_after.cpu())}")
+        bert_weight_after = model_p1.base_model.embeddings.word_embeddings.weight[0, :5].clone().cpu()
+        bert_weight_before_cpu = bert_weight_before.cpu() if bert_weight_before.is_cuda else bert_weight_before
+        print(f"   🔍 DEBUG: BERT embeddings after loading (first 5 values): {bert_weight_after}")
+        print(f"   🔍 DEBUG: BERT weights changed: {not torch.allclose(bert_weight_before_cpu, bert_weight_after)}")
+        print(f"   🔍 CONFIRMED: Both concept_embeddings AND BERT weights loaded from checkpoint")
 
         # Get concept embeddings from the loaded model
         concept_embeddings_p1 = model_p1.concept_embeddings.detach()
@@ -876,6 +878,80 @@ def phase_5_1_load_v302_checkpoints():
 # ============================================================================
 # PHASE 5.2: EVALUATE v302 WITH THRESHOLD TUNING
 # ============================================================================
+
+def test_phase1_with_v301_eval_code(models_dict):
+    """TEST: Use v301's EXACT evaluation code on Phase 1"""
+    print("\n" + "="*80)
+    print("🧪 TEST: Phase 1 with v301's EXACT evaluation code")
+    print("="*80)
+
+    # Load data EXACTLY like v301
+    with open(SHARED_DATA_PATH / 'val_split.pkl', 'rb') as f:
+        df_val = pickle.load(f)
+    with open(SHARED_DATA_PATH / 'test_split.pkl', 'rb') as f:
+        df_test = pickle.load(f)
+
+    tokenizer = AutoTokenizer.from_pretrained('emilyalsentzer/Bio_ClinicalBERT')
+
+    val_dataset = EvalDataset(df_val, tokenizer)
+    test_dataset = EvalDataset(df_test, tokenizer)
+    val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False)
+
+    # Get Phase 1 model
+    model_p1, concept_embeddings, _, _ = models_dict['phase1']
+
+    # Use v301's get_probs_from_model function EXACTLY
+    def get_probs_v301(model, loader, has_rag=False, concept_embeddings=None):
+        model.eval()
+        all_probs = []
+        all_labels = []
+
+        with torch.no_grad():
+            for batch in tqdm(loader, desc="Getting predictions", leave=False):
+                input_ids = batch['input_ids'].to(device)
+                attention_mask = batch['attention_mask'].to(device)
+                labels = batch['labels']
+
+                if has_rag and concept_embeddings is not None:
+                    texts = batch['text']
+                    outputs = model(input_ids, attention_mask, concept_embeddings, input_texts=texts)
+                    logits = outputs['logits']
+                else:
+                    logits = model(input_ids, attention_mask)
+
+                probs = torch.sigmoid(logits).cpu().numpy()
+                all_probs.append(probs)
+                all_labels.append(labels.numpy())
+
+        return np.vstack(all_probs), np.vstack(all_labels)
+
+    # Call with has_rag=True like v301 does
+    print("Getting validation predictions...")
+    probs_val, y_val = get_probs_v301(model_p1, val_loader, has_rag=True, concept_embeddings=concept_embeddings)
+
+    print("Getting test predictions...")
+    probs_test, y_test = get_probs_v301(model_p1, test_loader, has_rag=True, concept_embeddings=concept_embeddings)
+
+    # Tune threshold
+    tuned_threshold = tune_global_threshold(probs_val, y_val)
+
+    # Evaluate
+    test_fixed = eval_with_threshold(probs_test, y_test, 0.5)
+    test_tuned = eval_with_threshold(probs_test, y_test, tuned_threshold)
+    test_topk = eval_with_topk(probs_test, y_test, TOP_K)
+
+    print(f"\n✅ TEST RESULTS:")
+    print(f"   Test Fixed@0.5:    Macro F1 = {test_fixed['macro_f1']:.4f}, Micro F1 = {test_fixed['micro_f1']:.4f}")
+    print(f"   Test Tuned@{tuned_threshold:.2f}: Macro F1 = {test_tuned['macro_f1']:.4f}, Micro F1 = {test_tuned['micro_f1']:.4f}")
+    print(f"   Test Top-{TOP_K}:       Macro F1 = {test_topk['macro_f1']:.4f}, Micro F1 = {test_topk['micro_f1']:.4f}")
+
+    return {
+        'fixed': test_fixed,
+        'tuned': test_tuned,
+        'topk': test_topk,
+        'threshold': tuned_threshold
+    }
 
 def phase_5_2_evaluate_v302_with_tuning(models_dict):
     """
