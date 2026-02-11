@@ -700,6 +700,11 @@ def phase_5_1_load_v302_checkpoints():
 
     if phase1_checkpoint_path.exists():
         base_model = AutoModel.from_pretrained('emilyalsentzer/Bio_ClinicalBERT').to(device)
+
+        # DEBUG: Check a BERT weight before loading checkpoint
+        bert_weight_before = base_model.embeddings.word_embeddings.weight[0, :5].clone()
+        print(f"   🔍 DEBUG: BERT embeddings before loading (first 5 values): {bert_weight_before.cpu()}")
+
         model_p1 = ShifaMind302Phase1(base_model, NUM_CONCEPTS, NUM_DIAGNOSES).to(device)
 
         checkpoint = torch.load(phase1_checkpoint_path, map_location=device, weights_only=False)
@@ -723,6 +728,11 @@ def phase_5_1_load_v302_checkpoints():
         print(f"   🔍 DEBUG: 'concept_embeddings' in fixed_state_dict: {'concept_embeddings' in fixed_state_dict}")
 
         model_p1.load_state_dict(fixed_state_dict)
+
+        # DEBUG: Check BERT weight after loading checkpoint
+        bert_weight_after = model_p1.base_model.embeddings.word_embeddings.weight[0, :5].clone()
+        print(f"   🔍 DEBUG: BERT embeddings after loading (first 5 values): {bert_weight_after.cpu()}")
+        print(f"   🔍 DEBUG: BERT weights changed: {not torch.allclose(bert_weight_before, bert_weight_after.cpu())}")
 
         # Get concept embeddings from the loaded model
         concept_embeddings_p1 = model_p1.concept_embeddings.detach()
