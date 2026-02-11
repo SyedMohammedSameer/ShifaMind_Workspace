@@ -50,14 +50,20 @@ from sentence_transformers import SentenceTransformer
 
 # Import v301's EXACT Phase 1 class
 import sys
-sys.path.insert(0, str(Path(__file__).parent))
+import os
+# Add ShifaMind workspace to path (works in Colab)
+workspace_path = '/content/drive/MyDrive/ShifaMind/10_ShifaMind'
+if os.path.exists(workspace_path) and workspace_path not in sys.path:
+    sys.path.insert(0, workspace_path)
+
 try:
     from shifamindextra import ShifaMind2Phase1 as ShifaMind2Phase1_v301
     USE_V301_CLASS = True
     print("✅ Imported ShifaMind2Phase1 from shifamindextra.py")
-except ImportError:
+except ImportError as e:
     USE_V301_CLASS = False
-    print("⚠️  Could not import from shifamindextra.py, using local class")
+    print(f"⚠️  Could not import from shifamindextra.py: {e}")
+    print(f"   Using local class instead")
 
 try:
     import faiss
