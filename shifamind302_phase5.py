@@ -19,8 +19,8 @@ PRIMARY METRIC: Test Macro-F1 @ Tuned Threshold
 
 MODULAR DESIGN:
 - Each function (5.1 - 5.4) can be called independently
-- GPU-optimized with AMP
-- Prevents runtime disconnections in Colab
+- Optimized for Google Colab (A100/L4)
+- Prevents runtime disconnections with modular execution
 
 Expected Runtime: ~20-35 minutes (evaluation only, no training)
 ================================================================================
@@ -41,7 +41,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
-from torch.cuda.amp import autocast, GradScaler
 
 import numpy as np
 import pandas as pd
@@ -81,11 +80,6 @@ print(f"\n🖥️  Device: {device}")
 if torch.cuda.is_available():
     print(f"📊 GPU: {torch.cuda.get_device_name(0)}")
     print(f"💾 GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
-
-# GPU Optimizations
-USE_AMP = True
-PIN_MEMORY = True
-print(f"\n⚡ GPU Optimizations: AMP={USE_AMP}, Pin Memory={PIN_MEMORY}")
 
 # ============================================================================
 # CONFIGURATION
@@ -839,8 +833,8 @@ def phase_5_2_evaluate_v302_with_tuning(models_dict):
     val_dataset = EvalDataset(df_val, tokenizer)
     test_dataset = EvalDataset(df_test, tokenizer)
 
-    val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False, pin_memory=PIN_MEMORY)
-    test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False, pin_memory=PIN_MEMORY)
+    val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False)
 
     results = {}
 
