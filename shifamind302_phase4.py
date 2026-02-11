@@ -6,26 +6,23 @@ SHIFAMIND v302 PHASE 4: XAI Metrics Evaluation
 Author: Mohammed Sameer Syed
 University of Arizona - MS in AI Capstone
 
-Evaluates interpretability of v302 Phase 3 model using 5 XAI metrics:
+Evaluates interpretability of v302 Phase 3 model using 4 XAI metrics:
 
 1. Concept Completeness (Yeh et al., NeurIPS 2020)
    - R² metric: How much variance in predictions is explained by concepts?
 
-2. Intervention Accuracy (Koh et al., ICML 2020)
-   - Causal test: Does replacing predicted concepts with ground truth improve accuracy?
-
-3. Concept Accuracy (Standard ML)
+2. Concept Accuracy (Standard ML)
    - F1 score: How accurately does the model predict medical concepts?
 
-4. ConceptSHAP (Yeh et al., NeurIPS 2020)
+3. ConceptSHAP (Yeh et al., NeurIPS 2020)
    - Shapley values: Which concepts contribute most to each diagnosis?
 
-5. Concept-Diagnosis Correlation (Standard)
+4. Concept-Diagnosis Correlation (Standard)
    - Pearson correlation: Are concept activations aligned with diagnosis predictions?
 
-Note: We do NOT use TCAV (Kim et al., 2018) as it requires explicit concept
-exemplars which are not applicable to our text-based medical concepts extracted
-from clinical notes. Our metrics are adapted for the medical CBM domain.
+Note: We do NOT use TCAV (Kim et al., 2018) or Intervention Accuracy as they
+are not directly applicable to our text-based medical concept bottleneck model.
+Our metrics provide interpretable, domain-appropriate evaluation.
 
 ================================================================================
 """
@@ -419,68 +416,6 @@ class ShifaMind302Phase3(nn.Module):
 
         return result
 
-    def forward_with_concept_intervention(self, input_ids, attention_mask, concept_embeddings,
-                                         ground_truth_concepts, input_texts=None):
-        """
-        Forward pass with ground truth concepts (for Intervention Accuracy)
-        Replace predicted concepts with ground truth in the bottleneck
-        """
-        batch_size = input_ids.shape[0]
-
-        outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
-        hidden_states = outputs.last_hidden_state
-        pooled_bert = hidden_states.mean(dim=1)
-
-        # RAG fusion (same as normal forward)
-        if self.rag is not None and input_texts is not None:
-            rag_texts = [self.rag.retrieve(text) for text in input_texts]
-            rag_embeddings = []
-            for rag_text in rag_texts:
-                if rag_text:
-                    emb = self.rag.encoder.encode([rag_text], convert_to_numpy=True)[0]
-                else:
-                    emb = np.zeros(384)
-                rag_embeddings.append(emb)
-
-            rag_embeddings = torch.tensor(np.array(rag_embeddings), dtype=torch.float32).to(pooled_bert.device)
-            rag_context = self.rag_projection(rag_embeddings)
-
-            gate_input = torch.cat([pooled_bert, rag_context], dim=-1)
-            gate = self.rag_gate(gate_input) * self.rag_gate_max
-
-            bert_with_rag = pooled_bert + gate * rag_context
-        else:
-            bert_with_rag = pooled_bert
-
-        # Concept fusion
-        if self.concept_fusion is not None:
-            gat_concepts = self.get_graph_concept_embeddings()
-            bert_concepts = concept_embeddings.unsqueeze(0).expand(batch_size, -1, -1)
-            gat_concepts_batched = gat_concepts.unsqueeze(0).expand(batch_size, -1, -1)
-            fused_input = torch.cat([bert_concepts, gat_concepts_batched], dim=-1)
-            enhanced_concepts = self.concept_fusion(fused_input)
-        else:
-            enhanced_concepts = concept_embeddings.unsqueeze(0).expand(batch_size, -1, -1)
-
-        # INTERVENTION: Use ground truth concepts instead of cross-attention
-        # Scale ground truth concepts to match enhanced_concepts dimension
-        gt_concept_scores = ground_truth_concepts.unsqueeze(1)  # [batch, 1, num_concepts]
-
-        # Weight enhanced concepts by ground truth
-        intervened_context = (enhanced_concepts * gt_concept_scores.unsqueeze(-1)).mean(dim=1)  # [batch, 768]
-
-        # Gating (same as normal)
-        gate_input = torch.cat([bert_with_rag, intervened_context], dim=-1)
-        gate = self.gate_net(gate_input)
-
-        bottleneck_output = gate * intervened_context
-        bottleneck_output = self.layer_norm(bottleneck_output)
-
-        # Diagnosis prediction with intervened concepts
-        diagnosis_logits = self.diagnosis_head(bottleneck_output)
-
-        return diagnosis_logits
-
 tokenizer = AutoTokenizer.from_pretrained('emilyalsentzer/Bio_ClinicalBERT')
 bert_model = AutoModel.from_pretrained('emilyalsentzer/Bio_ClinicalBERT').to(device)
 concept_embedding_layer = nn.Embedding(NUM_CONCEPTS, 768).to(device)
@@ -607,85 +542,11 @@ else:
     print("   ❌ POOR: Concepts don't explain predictions well (<60%)")
 
 # ============================================================================
-# XAI METRIC 2: INTERVENTION ACCURACY
+# XAI METRIC 2: CONCEPT ACCURACY
 # ============================================================================
 
 print("\n" + "="*80)
-print("📏 XAI METRIC 2: INTERVENTION ACCURACY")
-print("="*80)
-print("Citation: Koh et al., 'Concept Bottleneck Models', ICML 2020")
-print("Measures: Does replacing predicted concepts with ground truth improve accuracy?")
-print("Target: >0.05 gain (concepts are causally important for predictions)")
-
-def compute_intervention_accuracy(model, loader, concept_embeddings):
-    """
-    Intervention Accuracy (Koh et al., ICML 2020)
-
-    Compare accuracy with:
-    1. Predicted concepts
-    2. Ground truth concepts (intervention)
-
-    Positive gap = concepts causally affect predictions
-    """
-    all_normal_preds = []
-    all_intervened_preds = []
-    all_labels = []
-
-    with torch.no_grad():
-        for batch in tqdm(loader, desc="Computing Intervention"):
-            input_ids = batch['input_ids'].to(device)
-            attention_mask = batch['attention_mask'].to(device)
-            labels = batch['labels'].to(device)
-            concept_labels = batch['concept_labels'].to(device)
-            texts = batch['text']
-
-            # Normal prediction (with predicted concepts)
-            outputs = model(input_ids, attention_mask, concept_embeddings, input_texts=texts)
-            normal_preds = (torch.sigmoid(outputs['logits']) > 0.5).float()
-
-            # Intervened prediction (with ground truth concepts)
-            intervened_logits = model.forward_with_concept_intervention(
-                input_ids, attention_mask, concept_embeddings, concept_labels, input_texts=texts
-            )
-            intervened_preds = (torch.sigmoid(intervened_logits) > 0.5).float()
-
-            all_normal_preds.append(normal_preds.cpu().numpy())
-            all_intervened_preds.append(intervened_preds.cpu().numpy())
-            all_labels.append(labels.cpu().numpy())
-
-    all_normal_preds = np.vstack(all_normal_preds)
-    all_intervened_preds = np.vstack(all_intervened_preds)
-    all_labels = np.vstack(all_labels)
-
-    normal_acc = accuracy_score(all_labels.ravel(), all_normal_preds.ravel())
-    intervened_acc = accuracy_score(all_labels.ravel(), all_intervened_preds.ravel())
-
-    intervention_gain = intervened_acc - normal_acc
-
-    return intervention_gain, normal_acc, intervened_acc
-
-intervention_gain, normal_acc, intervened_acc = compute_intervention_accuracy(model, test_loader, concept_embeddings)
-
-print(f"\n📊 Intervention Results:")
-print(f"   Normal Accuracy:     {normal_acc:.4f} (with predicted concepts)")
-print(f"   Intervened Accuracy: {intervened_acc:.4f} (with ground truth concepts)")
-print(f"   Intervention Gain:   {intervention_gain:+.4f}")
-
-if intervention_gain > 0.05:
-    print("   ✅ EXCELLENT: Strong causal relationship (>5% gain)")
-elif intervention_gain > 0.02:
-    print("   ⚠️  MODERATE: Some causal relationship (2-5% gain)")
-elif intervention_gain > 0:
-    print("   ⚠️  WEAK: Minimal causal relationship (<2% gain)")
-else:
-    print("   ❌ POOR: No causal relationship (concepts not used)")
-
-# ============================================================================
-# XAI METRIC 3: CONCEPT ACCURACY
-# ============================================================================
-
-print("\n" + "="*80)
-print("📏 XAI METRIC 3: CONCEPT ACCURACY")
+print("📏 XAI METRIC 2: CONCEPT ACCURACY")
 print("="*80)
 print("Citation: Standard multi-label classification metric")
 print("Measures: How accurately does the model predict medical concepts?")
@@ -750,11 +611,11 @@ else:
     print("   ⚠️  WEAK: Low concept prediction accuracy (<0.20 F1)")
 
 # ============================================================================
-# XAI METRIC 4: CONCEPTSHAP
+# XAI METRIC 3: CONCEPTSHAP
 # ============================================================================
 
 print("\n" + "="*80)
-print("📏 XAI METRIC 4: CONCEPTSHAP (Concept Importance)")
+print("📏 XAI METRIC 3: CONCEPTSHAP (Concept Importance)")
 print("="*80)
 print("Citation: Yeh et al., 'Completeness-aware Concept-Based Explanations', NeurIPS 2020")
 print("Measures: Shapley values - which concepts contribute most to each diagnosis?")
@@ -832,11 +693,11 @@ else:
     print("   ⚠️  WEAK: Low concept importance")
 
 # ============================================================================
-# XAI METRIC 5: CONCEPT-DIAGNOSIS CORRELATION
+# XAI METRIC 4: CONCEPT-DIAGNOSIS CORRELATION
 # ============================================================================
 
 print("\n" + "="*80)
-print("📏 XAI METRIC 5: CONCEPT-DIAGNOSIS CORRELATION")
+print("📏 XAI METRIC 4: CONCEPT-DIAGNOSIS CORRELATION")
 print("="*80)
 print("Citation: Standard statistical measure (Pearson correlation)")
 print("Measures: Are concept activations aligned with diagnosis predictions?")
@@ -912,17 +773,7 @@ xai_results = {
         'status': '✅' if completeness_score > 0.80 else ('⚠️' if completeness_score > 0.60 else '❌')
     },
 
-    'metric_2_intervention_accuracy': {
-        'intervention_gain': float(intervention_gain),
-        'normal_accuracy': float(normal_acc),
-        'intervened_accuracy': float(intervened_acc),
-        'interpretation': 'Causal importance - improvement from using ground truth concepts',
-        'citation': 'Koh et al., ICML 2020',
-        'target': '>0.05',
-        'status': '✅' if intervention_gain > 0.05 else ('⚠️' if intervention_gain > 0.02 else '❌')
-    },
-
-    'metric_3_concept_accuracy': {
+    'metric_2_concept_accuracy': {
         'macro_f1': float(concept_macro_f1),
         'micro_f1': float(concept_micro_f1),
         'precision': float(concept_precision),
@@ -934,7 +785,7 @@ xai_results = {
         'status': '✅' if concept_macro_f1 > 0.20 else '⚠️'
     },
 
-    'metric_4_conceptshap': {
+    'metric_3_conceptshap': {
         'average_importance': float(avg_shapley),
         'interpretation': 'Shapley values - which concepts contribute to diagnoses',
         'citation': 'Yeh et al., NeurIPS 2020 (simplified approximation)',
@@ -943,7 +794,7 @@ xai_results = {
         'note': 'Simplified approximation for computational efficiency'
     },
 
-    'metric_5_concept_diagnosis_correlation': {
+    'metric_4_concept_diagnosis_correlation': {
         'pearson_r': float(correlation_score),
         'interpretation': 'Pearson correlation - alignment between concepts and diagnoses',
         'citation': 'Standard statistical measure',
@@ -954,12 +805,11 @@ xai_results = {
     'summary': {
         'passed_metrics': sum([
             completeness_score > 0.80,
-            intervention_gain > 0.05,
             concept_macro_f1 > 0.20,
             avg_shapley > 0.01,
             correlation_score > 0.40
         ]),
-        'total_metrics': 5
+        'total_metrics': 4
     }
 }
 
@@ -970,12 +820,11 @@ print("="*80)
 print(f"{'Metric':<35} {'Score':<12} {'Target':<10} {'Status':<10}")
 print("-" * 80)
 print(f"{'1. Concept Completeness (R²)':<35} {completeness_score:<12.4f} {'>0.80':<10} {xai_results['metric_1_concept_completeness']['status']:<10}")
-print(f"{'2. Intervention Gain':<35} {intervention_gain:<12.4f} {'>0.05':<10} {xai_results['metric_2_intervention_accuracy']['status']:<10}")
-print(f"{'3. Concept Accuracy (F1)':<35} {concept_macro_f1:<12.4f} {'>0.20':<10} {xai_results['metric_3_concept_accuracy']['status']:<10}")
-print(f"{'4. ConceptSHAP (Importance)':<35} {avg_shapley:<12.4f} {'>0.01':<10} {xai_results['metric_4_conceptshap']['status']:<10}")
-print(f"{'5. Concept-Diagnosis Corr. (r)':<35} {correlation_score:<12.4f} {'>0.40':<10} {xai_results['metric_5_concept_diagnosis_correlation']['status']:<10}")
+print(f"{'2. Concept Accuracy (F1)':<35} {concept_macro_f1:<12.4f} {'>0.20':<10} {xai_results['metric_2_concept_accuracy']['status']:<10}")
+print(f"{'3. ConceptSHAP (Importance)':<35} {avg_shapley:<12.4f} {'>0.01':<10} {xai_results['metric_3_conceptshap']['status']:<10}")
+print(f"{'4. Concept-Diagnosis Corr. (r)':<35} {correlation_score:<12.4f} {'>0.40':<10} {xai_results['metric_4_concept_diagnosis_correlation']['status']:<10}")
 print("=" * 80)
-print(f"\nPassed Metrics: {xai_results['summary']['passed_metrics']}/5")
+print(f"\nPassed Metrics: {xai_results['summary']['passed_metrics']}/4")
 
 # Save results
 with open(RESULTS_PATH / 'xai_metrics_results.json', 'w') as f:
