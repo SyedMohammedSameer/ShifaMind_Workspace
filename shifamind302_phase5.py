@@ -705,7 +705,15 @@ def phase_5_1_load_v302_checkpoints():
 
         # Load checkpoint
         checkpoint = torch.load(phase2_checkpoint_path, map_location=device, weights_only=False)
-        graph_hidden = checkpoint['config']['rag_config'].get('graph_hidden_dim', 256)
+
+        # Get graph_hidden_dim from config (Phase 2 doesn't have rag_config)
+        if 'rag_config' in checkpoint['config']:
+            graph_hidden = checkpoint['config']['rag_config'].get('graph_hidden_dim', 256)
+        elif 'graph_hidden_dim' in checkpoint['config']:
+            graph_hidden = checkpoint['config']['graph_hidden_dim']
+        else:
+            graph_hidden = 256  # Default
+            print(f"   ⚠️  graph_hidden_dim not found in config, using default: {graph_hidden}")
 
         # Create GAT encoder
         gat_encoder = GATEncoder(
@@ -763,7 +771,15 @@ def phase_5_1_load_v302_checkpoints():
 
         # Load checkpoint
         checkpoint = torch.load(phase3_checkpoint_path, map_location=device, weights_only=False)
-        graph_hidden = checkpoint['config']['rag_config'].get('graph_hidden_dim', 256)
+
+        # Get graph_hidden_dim from config
+        if 'rag_config' in checkpoint['config']:
+            graph_hidden = checkpoint['config']['rag_config'].get('graph_hidden_dim', 256)
+        elif 'graph_hidden_dim' in checkpoint['config']:
+            graph_hidden = checkpoint['config']['graph_hidden_dim']
+        else:
+            graph_hidden = 256  # Default
+            print(f"   ⚠️  graph_hidden_dim not found in config, using default: {graph_hidden}")
 
         # Create GAT encoder
         gat_encoder = GATEncoder(
