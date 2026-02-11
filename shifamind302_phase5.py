@@ -349,8 +349,8 @@ class ConceptBottleneckCrossAttention(nn.Module):
 
         return output, attn_weights.mean(dim=1), gate.mean()
 
-class ShifaMind302Phase1(nn.Module):
-    """Phase 1: Concept Bottleneck only (EXACT v301 architecture)"""
+class ShifaMind2Phase1(nn.Module):
+    """ShifaMind2 Phase 1: Concept Bottleneck with Top-50 ICD-10"""
     def __init__(self, base_model, num_concepts, num_classes, fusion_layers=[9, 11]):
         super().__init__()
         self.base_model = base_model
@@ -705,7 +705,7 @@ def phase_5_1_load_v302_checkpoints():
         bert_weight_before = base_model.embeddings.word_embeddings.weight[0, :5].clone()
         print(f"   🔍 DEBUG: BERT embeddings before loading (first 5 values): {bert_weight_before.cpu()}")
 
-        model_p1 = ShifaMind302Phase1(base_model, NUM_CONCEPTS, NUM_DIAGNOSES).to(device)
+        model_p1 = ShifaMind2Phase1(base_model, NUM_CONCEPTS, NUM_DIAGNOSES).to(device)
 
         checkpoint = torch.load(phase1_checkpoint_path, map_location=device, weights_only=False)
 
