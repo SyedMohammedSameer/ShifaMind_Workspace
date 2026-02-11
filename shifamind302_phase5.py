@@ -371,7 +371,8 @@ class ShifaMind302Phase1(nn.Module):
         self.diagnosis_head = nn.Linear(self.hidden_size, num_classes)
         self.dropout = nn.Dropout(0.1)
 
-    def forward(self, input_ids, attention_mask, return_attention=False):
+    def forward(self, input_ids, attention_mask, concept_embeddings_external=None, input_texts=None):
+        """Forward pass - concept_embeddings_external and input_texts are for API compatibility (unused)"""
         outputs = self.base_model(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -382,9 +383,6 @@ class ShifaMind302Phase1(nn.Module):
         hidden_states = outputs.hidden_states
         current_hidden = outputs.last_hidden_state
 
-        attention_maps = {}
-        gate_values = []
-
         for layer_idx in self.fusion_layers:
             if str(layer_idx) in self.fusion_modules:
                 layer_hidden = hidden_states[layer_idx]
@@ -392,27 +390,15 @@ class ShifaMind302Phase1(nn.Module):
                     layer_hidden, self.concept_embeddings, attention_mask
                 )
                 current_hidden = fused_hidden
-                gate_values.append(gate.item())
-
-                if return_attention:
-                    attention_maps[f'layer_{layer_idx}'] = attn
 
         cls_hidden = self.dropout(current_hidden[:, 0, :])
         concept_scores = torch.sigmoid(self.concept_head(cls_hidden))
         diagnosis_logits = self.diagnosis_head(cls_hidden)
 
-        result = {
+        return {
             'logits': diagnosis_logits,
-            'concept_scores': concept_scores,
-            'hidden_states': current_hidden,
-            'cls_hidden': cls_hidden,
-            'avg_gate': np.mean(gate_values) if gate_values else 0.0
+            'concept_scores': concept_scores
         }
-
-        if return_attention:
-            result['attention_maps'] = attention_maps
-
-        return result
 
 class ShifaMind302Phase2(nn.Module):
     """Phase 2: Concept Bottleneck + GAT (no RAG)"""
@@ -929,13 +915,11 @@ def phase_5_2_evaluate_v302_with_tuning(models_dict):
                 attention_mask = batch['attention_mask'].to(device)
                 labels = batch['labels']
 
-                if phase_name == 'phase1':
-                    # Phase 1 doesn't accept concept_embeddings parameter
-                    outputs = model(input_ids, attention_mask)
-                elif has_rag:
+                if has_rag:
                     texts = batch['text']
                     outputs = model(input_ids, attention_mask, concept_embeddings, input_texts=texts)
                 else:
+                    # For Phase 1 and Phase 2, pass concept_embeddings (Phase 1 ignores it for API compatibility)
                     outputs = model(input_ids, attention_mask, concept_embeddings)
 
                 logits = outputs['logits']
@@ -961,13 +945,11 @@ def phase_5_2_evaluate_v302_with_tuning(models_dict):
                 attention_mask = batch['attention_mask'].to(device)
                 labels = batch['labels']
 
-                if phase_name == 'phase1':
-                    # Phase 1 doesn't accept concept_embeddings parameter
-                    outputs = model(input_ids, attention_mask)
-                elif has_rag:
+                if has_rag:
                     texts = batch['text']
                     outputs = model(input_ids, attention_mask, concept_embeddings, input_texts=texts)
                 else:
+                    # For Phase 1 and Phase 2, pass concept_embeddings (Phase 1 ignores it for API compatibility)
                     outputs = model(input_ids, attention_mask, concept_embeddings)
 
                 logits = outputs['logits']
