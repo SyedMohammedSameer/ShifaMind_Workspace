@@ -463,14 +463,19 @@ class ShifaMind302Phase3(nn.Module):
             enhanced_concepts = concept_embeddings.unsqueeze(0).expand(batch_size, -1, -1)
 
         # INTERVENTION: Use ground truth concepts instead of cross-attention
-        # Scale ground truth concepts to match enhanced_concepts dimension
-        gt_concept_scores = ground_truth_concepts.unsqueeze(1)  # [batch, 1, num_concepts]
+        # Weight enhanced concepts by ground truth concept scores
+        # ground_truth_concepts: [batch, num_concepts]
+        # enhanced_concepts: [batch, num_concepts, 768]
+        gt_weights = ground_truth_concepts.unsqueeze(-1)  # [batch, num_concepts, 1]
 
-        # Weight enhanced concepts by ground truth
-        intervened_context = (enhanced_concepts * gt_concept_scores.unsqueeze(-1)).mean(dim=1)  # [batch, 768]
+        # Weight each concept's embedding by its ground truth score
+        weighted_concepts = enhanced_concepts * gt_weights  # [batch, num_concepts, 768]
+
+        # Average across concepts to get context vector
+        intervened_context = weighted_concepts.mean(dim=1)  # [batch, 768]
 
         # Gating (same as normal)
-        gate_input = torch.cat([bert_with_rag, intervened_context], dim=-1)
+        gate_input = torch.cat([bert_with_rag, intervened_context], dim=-1)  # [batch, 1536]
         gate = self.gate_net(gate_input)
 
         bottleneck_output = gate * intervened_context
