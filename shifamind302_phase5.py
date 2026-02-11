@@ -727,7 +727,22 @@ def phase_5_1_load_v302_checkpoints():
         # DEBUG: Check if concept_embeddings is in fixed_state_dict
         print(f"   🔍 DEBUG: 'concept_embeddings' in fixed_state_dict: {'concept_embeddings' in fixed_state_dict}")
 
-        model_p1.load_state_dict(fixed_state_dict)
+        # Load with strict=True to see if there are any missing/unexpected keys
+        try:
+            model_p1.load_state_dict(fixed_state_dict, strict=True)
+            print(f"   ✅ All keys loaded successfully (strict=True)")
+        except RuntimeError as e:
+            print(f"   ⚠️  ERROR with strict=True: {str(e)[:200]}")
+            print(f"   Trying with strict=False...")
+            incompatible = model_p1.load_state_dict(fixed_state_dict, strict=False)
+            if incompatible.missing_keys:
+                print(f"   ⚠️  MISSING KEYS ({len(incompatible.missing_keys)}):")
+                for key in incompatible.missing_keys[:10]:
+                    print(f"      - {key}")
+            if incompatible.unexpected_keys:
+                print(f"   ⚠️  UNEXPECTED KEYS ({len(incompatible.unexpected_keys)}):")
+                for key in incompatible.unexpected_keys[:10]:
+                    print(f"      - {key}")
 
         # DEBUG: Check BERT weight after loading checkpoint
         bert_weight_after = model_p1.base_model.embeddings.word_embeddings.weight[0, :5].clone().cpu()
