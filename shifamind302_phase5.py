@@ -671,6 +671,7 @@ def phase_5_1_load_v302_checkpoints():
     # ========================================================================
     print("\n🔵 Loading Phase 1 (Concept Bottleneck only)...")
     phase1_checkpoint_path = OUTPUT_BASE_301 / 'checkpoints' / 'phase1' / 'phase1_best.pt'
+    print(f"   📍 Checkpoint path: {phase1_checkpoint_path}")
 
     if phase1_checkpoint_path.exists():
         base_model = AutoModel.from_pretrained('emilyalsentzer/Bio_ClinicalBERT').to(device)
@@ -947,9 +948,9 @@ def phase_5_2_evaluate_v302_with_tuning(models_dict):
         }
 
         print(f"   ✅ Results:")
-        print(f"      Test Fixed@0.5:     Macro F1 = {test_results['fixed_05']['macro_f1']:.4f}")
-        print(f"      Test Tuned@{tuned_threshold:.2f}:  Macro F1 = {test_results['tuned']['macro_f1']:.4f}")
-        print(f"      Test Top-{TOP_K}:        Macro F1 = {test_results['topk']['macro_f1']:.4f}")
+        print(f"      Test Fixed@0.5:      Macro F1 = {test_results['fixed_05']['macro_f1']:.4f}, Micro F1 = {test_results['fixed_05']['micro_f1']:.4f}")
+        print(f"      Test Tuned@{tuned_threshold:.2f}:   Macro F1 = {test_results['tuned']['macro_f1']:.4f}, Micro F1 = {test_results['tuned']['micro_f1']:.4f}")
+        print(f"      Test Top-{TOP_K}:         Macro F1 = {test_results['topk']['macro_f1']:.4f}, Micro F1 = {test_results['topk']['micro_f1']:.4f}")
 
         # Clean up
         del model
