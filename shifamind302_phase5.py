@@ -910,7 +910,10 @@ def phase_5_2_evaluate_v302_with_tuning(models_dict):
             continue
 
         model, concept_embeddings, rag, graph_data = models_dict[phase_name]
-        has_rag = (rag is not None and phase_name == 'phase3')
+
+        # For ShifaMind models (all 3 phases), we always pass concept_embeddings and input_texts
+        # Phase 3 uses them, Phase 1/2 ignore input_texts but need concept_embeddings for API compatibility
+        is_shifamind_model = True  # All our phases are ShifaMind models
 
         phase_display = {
             'phase1': 'Phase 1 (CB only)',
@@ -932,12 +935,9 @@ def phase_5_2_evaluate_v302_with_tuning(models_dict):
                 attention_mask = batch['attention_mask'].to(device)
                 labels = batch['labels']
 
-                if has_rag:
-                    texts = batch['text']
-                    outputs = model(input_ids, attention_mask, concept_embeddings, input_texts=texts)
-                else:
-                    # For Phase 1 and Phase 2, pass concept_embeddings (Phase 1 ignores it for API compatibility)
-                    outputs = model(input_ids, attention_mask, concept_embeddings)
+                # All ShifaMind models take concept_embeddings and input_texts (Phase 1/2 ignore input_texts)
+                texts = batch['text']
+                outputs = model(input_ids, attention_mask, concept_embeddings, input_texts=texts)
 
                 logits = outputs['logits']
                 probs = torch.sigmoid(logits).cpu().numpy()
@@ -962,12 +962,9 @@ def phase_5_2_evaluate_v302_with_tuning(models_dict):
                 attention_mask = batch['attention_mask'].to(device)
                 labels = batch['labels']
 
-                if has_rag:
-                    texts = batch['text']
-                    outputs = model(input_ids, attention_mask, concept_embeddings, input_texts=texts)
-                else:
-                    # For Phase 1 and Phase 2, pass concept_embeddings (Phase 1 ignores it for API compatibility)
-                    outputs = model(input_ids, attention_mask, concept_embeddings)
+                # All ShifaMind models take concept_embeddings and input_texts (Phase 1/2 ignore input_texts)
+                texts = batch['text']
+                outputs = model(input_ids, attention_mask, concept_embeddings, input_texts=texts)
 
                 logits = outputs['logits']
                 probs = torch.sigmoid(logits).cpu().numpy()
