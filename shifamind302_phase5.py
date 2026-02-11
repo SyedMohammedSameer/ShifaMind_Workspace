@@ -147,6 +147,30 @@ print("\n" + "="*80)
 print("📊 UNIFIED EVALUATION PROTOCOL")
 print("="*80)
 
+def fix_checkpoint_keys(state_dict, rename_base_to_bert=True, skip_concept_embeddings=True):
+    """Fix key names from checkpoint to match model architecture
+
+    Args:
+        state_dict: The checkpoint state dict
+        rename_base_to_bert: If True, rename base_model.* to bert.* (for Phase 3)
+                             If False, keep as base_model.* (for Phase 1)
+        skip_concept_embeddings: If True, skip concept_embeddings from state dict (for Phase 3)
+                                 If False, include it (for Phase 1)
+    """
+    new_state_dict = {}
+    for key, value in state_dict.items():
+        # Skip concept_embeddings only for Phase 3 (loaded separately)
+        if key == 'concept_embeddings' and skip_concept_embeddings:
+            continue
+
+        # Rename base_model.* to bert.* for Phase 3
+        if rename_base_to_bert and key.startswith('base_model.'):
+            new_key = key.replace('base_model.', 'bert.')
+            new_state_dict[new_key] = value
+        else:
+            new_state_dict[key] = value
+    return new_state_dict
+
 def tune_global_threshold(probs_val, y_val):
     """Find optimal threshold on validation set"""
     best_threshold = 0.5
@@ -694,23 +718,13 @@ def phase_5_1_load_v302_checkpoints():
 
         checkpoint = torch.load(phase1_checkpoint_path, map_location=device, weights_only=False)
 
-        # DEBUG: Print checkpoint keys to verify structure
-        print(f"   🔍 Checkpoint keys: {list(checkpoint.keys())}")
-        if 'model_state_dict' in checkpoint:
-            state_dict = checkpoint['model_state_dict']
-            print(f"   🔍 Sample model_state_dict keys:")
-            for i, key in enumerate(list(state_dict.keys())[:10]):
-                print(f"      {i+1}. {key}")
+        # Fix key names from checkpoint (keep base_model.* and include concept_embeddings for Phase 1)
+        fixed_state_dict = fix_checkpoint_keys(checkpoint['model_state_dict'],
+                                                rename_base_to_bert=False,
+                                                skip_concept_embeddings=False)
+        model_p1.load_state_dict(fixed_state_dict)
 
-            # Check if weights actually loaded
-            incompatible = model_p1.load_state_dict(state_dict, strict=False)
-            if incompatible.missing_keys:
-                print(f"   ⚠️  Missing keys: {len(incompatible.missing_keys)}")
-                print(f"      First 5: {incompatible.missing_keys[:5]}")
-            if incompatible.unexpected_keys:
-                print(f"   ⚠️  Unexpected keys: {len(incompatible.unexpected_keys)}")
-                print(f"      First 5: {incompatible.unexpected_keys[:5]}")
-
+        # Get concept embeddings from the loaded model
         concept_embeddings_p1 = model_p1.concept_embeddings.detach()
         model_p1.eval()
 
