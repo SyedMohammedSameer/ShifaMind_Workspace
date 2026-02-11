@@ -975,12 +975,20 @@ def phase_5_3_load_baseline_results():
     print("📂 PHASE 5.3: LOADING v301 BASELINE RESULTS")
     print("="*80)
 
-    baseline_results_path = OUTPUT_BASE_301 / 'results' / 'phase5_fair' / 'fair_evaluation_results.json'
+    # Try phase5_complete first (has all baselines)
+    baseline_results_path = OUTPUT_BASE_301 / 'results' / 'phase5_complete' / 'complete_comparison.json'
 
     if not baseline_results_path.exists():
-        print(f"⚠️  Baseline results not found at: {baseline_results_path}")
+        # Fallback to phase5_fair (only has ShifaMind phases, no baselines)
+        baseline_results_path = OUTPUT_BASE_301 / 'results' / 'phase5_fair' / 'fair_evaluation_results.json'
+        print(f"   ⚠️  phase5_complete not found, trying phase5_fair...")
+
+    if not baseline_results_path.exists():
+        print(f"   ⚠️  Baseline results not found at: {baseline_results_path}")
         print("   Returning empty baseline results")
         return {}
+
+    print(f"   📍 Loading from: {baseline_results_path}")
 
     with open(baseline_results_path, 'r') as f:
         data = json.load(f)
@@ -991,11 +999,17 @@ def phase_5_3_load_baseline_results():
         for model_name, results in data['models'].items():
             if 'ShifaMind' not in model_name and 'Phase' not in model_name:
                 baseline_results[model_name] = results
+    else:
+        # If no 'models' key, the entire file might be the results dict
+        for model_name, results in data.items():
+            if 'ShifaMind' not in model_name and 'Phase' not in model_name:
+                baseline_results[model_name] = results
 
     print(f"✅ Loaded {len(baseline_results)} baseline models:")
     for model_name in baseline_results:
-        test_macro = baseline_results[model_name]['test']['tuned']['macro_f1']
-        print(f"   - {model_name}: Test Macro F1 @ Tuned = {test_macro:.4f}")
+        if 'test' in baseline_results[model_name] and 'tuned' in baseline_results[model_name]['test']:
+            test_macro = baseline_results[model_name]['test']['tuned']['macro_f1']
+            print(f"   - {model_name}: Test Macro F1 @ Tuned = {test_macro:.4f}")
 
     return baseline_results
 
