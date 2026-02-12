@@ -119,14 +119,35 @@ if not run_folders_302:
 OUTPUT_BASE_302 = run_folders_302[0]
 print(f"📁 v302 Run folder: {OUTPUT_BASE_302.name}")
 
-# Find latest v301 run (for baseline comparison)
+# Find BEST Phase 1 checkpoint across all v301 runs
 run_folders_301 = sorted([d for d in SHIFAMIND301_BASE.glob('run_*') if d.is_dir()], reverse=True)
 if not run_folders_301:
     print("❌ No v301 run found!")
     sys.exit(1)
 
-OUTPUT_BASE_301 = run_folders_301[0]
-print(f"📁 v301 Run folder: {OUTPUT_BASE_301.name}")
+print("\n🔍 Searching for BEST Phase 1 checkpoint...")
+best_phase1_run = None
+best_phase1_f1 = -1
+
+for run_folder in run_folders_301:
+    phase1_ckpt = run_folder / 'checkpoints' / 'phase1' / 'phase1_best.pt'
+    if phase1_ckpt.exists():
+        try:
+            ckpt = torch.load(phase1_ckpt, map_location='cpu', weights_only=False)
+            macro_f1 = ckpt.get('macro_f1', -1)
+            if macro_f1 > best_phase1_f1:
+                best_phase1_f1 = macro_f1
+                best_phase1_run = run_folder
+                print(f"   {run_folder.name}: Macro F1 = {macro_f1:.4f}")
+        except:
+            pass
+
+if best_phase1_run is None:
+    print("❌ No valid Phase 1 checkpoint found!")
+    sys.exit(1)
+
+OUTPUT_BASE_301 = best_phase1_run
+print(f"✅ Using BEST: {OUTPUT_BASE_301.name} (Training Macro F1: {best_phase1_f1:.4f})")
 
 # Paths
 SHARED_DATA_PATH = OUTPUT_BASE_301 / 'shared_data'  # Use v301 data (same splits)
