@@ -175,6 +175,11 @@ TOP_50_CODES = top50_info['top_50_codes']
 
 print(f"\n✅ Loaded Top-50 codes: {len(TOP_50_CODES)}")
 
+# Save to new run folder for Phase 2 to use
+with open(SHARED_DATA_PATH / 'top50_icd10_info.json', 'w') as f:
+    json.dump(top50_info, f, indent=2)
+print(f"💾 Saved to: {SHARED_DATA_PATH / 'top50_icd10_info.json'}")
+
 # Load CSV
 print(f"\n✅ Loading from: {DATA_CSV_PATH}")
 df_all = pd.read_csv(DATA_CSV_PATH)
