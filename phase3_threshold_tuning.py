@@ -29,6 +29,12 @@ from sentence_transformers import SentenceTransformer
 import faiss
 
 # ============================================================================
+# CONSTANTS
+# ============================================================================
+
+RAG_GATE_MAX = 0.4  # Cap RAG influence at 40%
+
+# ============================================================================
 # CONFIGURATION
 # ============================================================================
 
@@ -409,73 +415,63 @@ class ShifaMindPhase3RAG(nn.Module):
 
         self.rag_gate = nn.Sequential(
             nn.Linear(hidden_size * 2, hidden_size),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(hidden_size, 1),
             nn.Sigmoid()
         )
 
-        self.final_fusion = nn.Sequential(
-            nn.Linear(hidden_size * 2, hidden_size),
-            nn.LayerNorm(hidden_size),
-            nn.ReLU(),
-            nn.Dropout(0.3)
+    def forward(self, input_ids, attention_mask, concept_embeddings_bert, input_texts=None):
+        """
+        Phase 3 forward with RAG augmentation
+
+        Args:
+            input_ids: [batch, seq_len]
+            attention_mask: [batch, seq_len]
+            concept_embeddings_bert: [num_concepts, 768] - learned BERT concept embeddings from Phase 1
+            input_texts: List of input texts for RAG retrieval (optional)
+        """
+        batch_size = input_ids.shape[0]
+
+        # RAG retrieval and augmentation
+        if self.rag is not None and input_texts is not None:
+            # Retrieve relevant evidence
+            rag_texts = [self.rag.retrieve(text) for text in input_texts]
+
+            # Encode RAG context
+            rag_embeddings = []
+            for rag_text in rag_texts:
+                if rag_text:
+                    emb = self.rag.encoder.encode([rag_text], convert_to_numpy=True)[0]
+                else:
+                    emb = np.zeros(384)
+                rag_embeddings.append(emb)
+
+            rag_embeddings = torch.tensor(np.array(rag_embeddings), dtype=torch.float32).to(input_ids.device)
+            rag_context = self.rag_projection(rag_embeddings)  # [batch, 768]
+
+            # Get pooled BERT for gating
+            with torch.no_grad():
+                bert_outputs = self.phase2_model.bert(input_ids=input_ids, attention_mask=attention_mask)
+                pooled_bert = bert_outputs.last_hidden_state.mean(dim=1)
+
+            # Gated fusion
+            gate_input = torch.cat([pooled_bert, rag_context], dim=-1)
+            gate = self.rag_gate(gate_input)
+            gate = gate * RAG_GATE_MAX  # Cap at 40%
+
+            # Augment concept embeddings with RAG context
+            # Broadcast rag_context to match concept embeddings shape
+            rag_aug = (gate * rag_context).mean(dim=0, keepdim=True)  # [1, 768]
+            concept_embeddings_augmented = concept_embeddings_bert + rag_aug  # [num_concepts, 768]
+        else:
+            concept_embeddings_augmented = concept_embeddings_bert
+
+        # Run Phase 2 model with augmented concept embeddings
+        outputs = self.phase2_model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            concept_embeddings_bert=concept_embeddings_augmented
         )
 
-        # Final diagnosis head
-        self.diagnosis_head = nn.Linear(hidden_size, phase2_model.num_diagnoses)
-
-    def forward(self, input_ids, attention_mask, concept_embeddings_bert, texts=None, use_rag=True):
-        # Get Phase 2 outputs
-        phase2_out = self.phase2_model(input_ids, attention_mask, concept_embeddings_bert)
-        bottleneck = phase2_out['bottleneck_output']  # [batch, 768]
-
-        if not use_rag or texts is None:
-            # No RAG - just use Phase 2 diagnosis head
-            return {
-                **phase2_out,
-                'logits': self.diagnosis_head(bottleneck),
-                'rag_gate_values': torch.zeros(bottleneck.shape[0], 1, device=bottleneck.device)
-            }
-
-        # RAG retrieval
-        batch_size = bottleneck.shape[0]
-        rag_embeddings = []
-
-        for text in texts:
-            # Retrieve evidence
-            evidence = self.rag.retrieve(text, top_k=3)
-
-            # Encode retrieved passages
-            evidence_texts = [e['text'] for e in evidence]
-            evidence_embs = self.rag.encoder.encode(evidence_texts, convert_to_numpy=False, convert_to_tensor=True)
-            evidence_embs = evidence_embs.to(bottleneck.device)
-
-            # Pool evidence embeddings
-            pooled_evidence = evidence_embs.mean(dim=0)  # [384]
-            rag_embeddings.append(pooled_evidence)
-
-        rag_embeddings = torch.stack(rag_embeddings)  # [batch, 384]
-        rag_projected = self.rag_projection(rag_embeddings)  # [batch, 768]
-
-        # Gated fusion of Phase 2 + RAG
-        fusion_input = torch.cat([bottleneck, rag_projected], dim=-1)  # [batch, 1536]
-        rag_gate_value = self.rag_gate(fusion_input)  # [batch, 1]
-
-        # Weighted combination
-        combined = rag_gate_value * rag_projected + (1 - rag_gate_value) * bottleneck
-
-        # Final fusion
-        final_repr = self.final_fusion(torch.cat([bottleneck, combined], dim=-1))
-
-        # Diagnosis prediction
-        diagnosis_logits = self.diagnosis_head(final_repr)
-
-        return {
-            **phase2_out,
-            'logits': diagnosis_logits,
-            'rag_gate_values': rag_gate_value
-        }
+        return outputs
 
 # ============================================================================
 # LOAD MODEL
