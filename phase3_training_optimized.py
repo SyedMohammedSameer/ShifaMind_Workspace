@@ -506,107 +506,183 @@ except ImportError:
     from torch_geometric.nn import GATConv
     from torch_geometric.data import Data
 
-class ShifaMindPhase2GAT(nn.Module):
-    """Phase 2 model with GAT knowledge graph"""
-    def __init__(self, num_concepts, num_labels, hidden_size=768, gat_heads=4, gat_layers=2):
+class GATEncoder(nn.Module):
+    """GAT encoder for learning concept embeddings from knowledge graph"""
+    def __init__(self, in_channels, hidden_channels, num_layers=2, heads=4, dropout=0.3):
         super().__init__()
 
-        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.convs = nn.ModuleList()
+
+        # First layer: in -> hidden
+        self.convs.append(GATConv(
+            in_channels,
+            hidden_channels // heads,  # Output per head
+            heads=heads,
+            dropout=dropout,
+            concat=True
+        ))
+
+        # Middle layers
+        for _ in range(num_layers - 2):
+            self.convs.append(GATConv(
+                hidden_channels,
+                hidden_channels // heads,
+                heads=heads,
+                dropout=dropout,
+                concat=True
+            ))
+
+        # Last layer: hidden -> hidden (average heads)
+        if num_layers > 1:
+            self.convs.append(GATConv(
+                hidden_channels,
+                hidden_channels,
+                heads=1,
+                dropout=dropout,
+                concat=False
+            ))
+
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x, edge_index):
+        for i, conv in enumerate(self.convs):
+            x = conv(x, edge_index)
+            if i < self.num_layers - 1:
+                x = F.relu(x)
+                x = self.dropout(x)
+        return x
+
+
+class ShifaMindPhase2GAT(nn.Module):
+    """
+    Phase 2 model - EXACT architecture from phase2_training_optimized.py
+    """
+    def __init__(self, bert_model, gat_encoder, graph_data, num_concepts, num_diagnoses):
+        super().__init__()
+
+        self.bert = bert_model
+        self.gat = gat_encoder
+        self.hidden_size = 768
+        self.graph_hidden = 256  # From Phase 2
         self.num_concepts = num_concepts
-        self.num_labels = num_labels
+        self.num_diagnoses = num_diagnoses
 
-        # BioClinicalBERT encoder
-        self.bert = AutoModel.from_pretrained('emilyalsentzer/Bio_ClinicalBERT')
+        # Store graph
+        self.register_buffer('graph_x', graph_data.x)
+        self.register_buffer('graph_edge_index', graph_data.edge_index)
+        self.graph_node_to_idx = graph_data.node_to_idx
+        self.graph_idx_to_node = graph_data.idx_to_node
 
-        # Concept embeddings
-        self.concept_embeddings = nn.Embedding(num_concepts, hidden_size)
+        # Project graph embeddings to BERT dimension
+        self.graph_proj = nn.Linear(self.graph_hidden, self.hidden_size)
 
-        # Cross-attention
+        # Concept fusion: combine BERT + GAT embeddings
+        self.concept_fusion = nn.Sequential(
+            nn.Linear(self.hidden_size + self.hidden_size, self.hidden_size),
+            nn.LayerNorm(self.hidden_size),
+            nn.ReLU(),
+            nn.Dropout(0.3)
+        )
+
+        # Cross-attention: text attends to enhanced concepts
         self.cross_attention = nn.MultiheadAttention(
-            embed_dim=hidden_size,
+            embed_dim=self.hidden_size,
             num_heads=8,
             dropout=0.1,
             batch_first=True
         )
 
-        # Gating mechanism
+        # Multiplicative gating
         self.gate_net = nn.Sequential(
-            nn.Linear(hidden_size * 2, hidden_size),
+            nn.Linear(self.hidden_size * 2, self.hidden_size),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(self.hidden_size, self.hidden_size),
             nn.Sigmoid()
         )
 
-        self.layer_norm = nn.LayerNorm(hidden_size)
+        self.layer_norm = nn.LayerNorm(self.hidden_size)
 
-        # GAT layers
-        self.gat_layers = nn.ModuleList()
-        for i in range(gat_layers):
-            in_channels = hidden_size if i == 0 else hidden_size * gat_heads
-            out_channels = hidden_size
-            self.gat_layers.append(
-                GATConv(in_channels, out_channels, heads=gat_heads, dropout=0.1, concat=True)
-            )
+        # Output heads
+        self.concept_head = nn.Linear(self.hidden_size, num_concepts)
+        self.diagnosis_head = nn.Linear(self.hidden_size, num_diagnoses)
 
-        # Final projection after GAT
-        self.gat_projection = nn.Linear(hidden_size * gat_heads, hidden_size)
+        self.dropout = nn.Dropout(0.1)
 
-        # Heads
-        self.concept_head = nn.Linear(hidden_size, num_concepts)
-        self.diagnosis_head = nn.Linear(hidden_size * 2, num_labels)  # Concat bottleneck + graph
+    def get_graph_concept_embeddings(self):
+        """Run GAT and extract concept embeddings"""
+        # Run GAT on full graph
+        graph_embeddings = self.gat(self.graph_x, self.graph_edge_index)
 
-    def forward(self, input_ids, attention_mask, graph_data=None):
+        # Extract concept node embeddings (using ALL_CONCEPTS from global scope)
+        concept_embeds = []
+        for concept in ALL_CONCEPTS:
+            if concept in self.graph_node_to_idx:
+                idx = self.graph_node_to_idx[concept]
+                concept_embeds.append(graph_embeddings[idx])
+            else:
+                # Fallback: zeros
+                concept_embeds.append(torch.zeros(self.graph_hidden, device=self.graph_x.device))
+
+        return torch.stack(concept_embeds)  # [num_concepts, graph_hidden]
+
+    def forward(self, input_ids, attention_mask, concept_embeddings_bert):
+        """
+        Forward pass with BERT + GAT fusion (EXACT Phase 2 architecture)
+
+        Args:
+            input_ids: [batch, seq_len]
+            attention_mask: [batch, seq_len]
+            concept_embeddings_bert: [num_concepts, 768] - learned BERT concept embeddings
+        """
         batch_size = input_ids.shape[0]
 
-        # BERT encoding
+        # 1. Encode text with BERT
         outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
-        hidden_states = outputs.last_hidden_state
-        pooled_bert = hidden_states.mean(dim=1)
+        hidden_states = outputs.last_hidden_state  # [batch, seq_len, 768]
 
-        # Concept bottleneck
-        concept_embs = self.concept_embeddings.weight.unsqueeze(0).expand(batch_size, -1, -1)
+        # 2. Get GAT-enhanced concept embeddings
+        gat_concepts = self.get_graph_concept_embeddings()  # [num_concepts, 768]
 
-        bert_expanded = pooled_bert.unsqueeze(1).expand(-1, hidden_states.shape[1], -1)
-        concept_context, concept_attn = self.cross_attention(
-            query=bert_expanded,
-            key=concept_embs,
-            value=concept_embs,
+        # 3. Fuse BERT + GAT concept embeddings
+        bert_concepts = concept_embeddings_bert.unsqueeze(0).expand(batch_size, -1, -1)
+        gat_concepts_batched = gat_concepts.unsqueeze(0).expand(batch_size, -1, -1)
+
+        fused_input = torch.cat([bert_concepts, gat_concepts_batched], dim=-1)  # [batch, num_concepts, 1536]
+        enhanced_concepts = self.concept_fusion(fused_input)  # [batch, num_concepts, 768]
+
+        # 4. Cross-attention: text attends to enhanced concepts
+        context, attn_weights = self.cross_attention(
+            query=hidden_states,
+            key=enhanced_concepts,
+            value=enhanced_concepts,
             need_weights=True
-        )
+        )  # context: [batch, seq_len, 768]
 
-        pooled_context = concept_context.mean(dim=1)
+        # 5. Multiplicative bottleneck gating
+        pooled_text = hidden_states.mean(dim=1)  # [batch, 768]
+        pooled_context = context.mean(dim=1)  # [batch, 768]
 
-        gate_input = torch.cat([pooled_bert, pooled_context], dim=-1)
-        gate = self.gate_net(gate_input)
+        gate_input = torch.cat([pooled_text, pooled_context], dim=-1)
+        gate = self.gate_net(gate_input)  # [batch, 768]
 
         bottleneck_output = gate * pooled_context
         bottleneck_output = self.layer_norm(bottleneck_output)
 
-        # Concept predictions
-        concept_logits = self.concept_head(pooled_bert)
-
-        # Graph convolution
-        if graph_data is not None:
-            x = graph_data.x  # [num_nodes, hidden_size]
-            edge_index = graph_data.edge_index
-
-            for gat in self.gat_layers:
-                x = gat(x, edge_index)
-                x = F.elu(x)
-
-            x = self.gat_projection(x)
-            graph_output = x.mean(dim=0, keepdim=True).expand(batch_size, -1)
-        else:
-            graph_output = torch.zeros_like(bottleneck_output)
-
-        # Combine bottleneck + graph
-        combined = torch.cat([bottleneck_output, graph_output], dim=-1)
-        diagnosis_logits = self.diagnosis_head(combined)
+        # 6. Output heads
+        cls_hidden = self.dropout(pooled_text)
+        concept_logits = self.concept_head(cls_hidden)
+        concept_scores = torch.sigmoid(concept_logits)
+        diagnosis_logits = self.diagnosis_head(bottleneck_output)
 
         return {
             'logits': diagnosis_logits,
             'concept_logits': concept_logits,
-            'concept_scores': torch.sigmoid(concept_logits),
+            'concept_scores': concept_scores,
             'gate_values': gate,
-            'concept_attn': concept_attn
+            'attention_weights': attn_weights,
+            'bottleneck_output': bottleneck_output
         }
 
 # ============================================================================
@@ -631,18 +707,24 @@ class ShifaMindPhase3RAG(nn.Module):
             nn.Sigmoid()
         )
 
-    def forward(self, input_ids, attention_mask, graph_data=None, input_texts=None):
+    def forward(self, input_ids, attention_mask, concept_embeddings_bert, input_texts=None):
+        """
+        Phase 3 forward with RAG augmentation
+
+        Args:
+            input_ids: [batch, seq_len]
+            attention_mask: [batch, seq_len]
+            concept_embeddings_bert: [num_concepts, 768] - learned BERT concept embeddings from Phase 1
+            input_texts: List of input texts for RAG retrieval (optional)
+        """
         batch_size = input_ids.shape[0]
 
-        # Get BERT representation
-        bert_outputs = self.phase2_model.bert(input_ids=input_ids, attention_mask=attention_mask)
-        hidden_states = bert_outputs.last_hidden_state
-        pooled_bert = hidden_states.mean(dim=1)
-
-        # RAG retrieval and fusion
+        # RAG retrieval and augmentation
         if self.rag is not None and input_texts is not None:
+            # Retrieve relevant evidence
             rag_texts = [self.rag.retrieve(text) for text in input_texts]
 
+            # Encode RAG context
             rag_embeddings = []
             for rag_text in rag_texts:
                 if rag_text:
@@ -651,80 +733,80 @@ class ShifaMindPhase3RAG(nn.Module):
                     emb = np.zeros(384)
                 rag_embeddings.append(emb)
 
-            rag_embeddings = torch.tensor(np.array(rag_embeddings), dtype=torch.float32).to(pooled_bert.device)
-            rag_context = self.rag_projection(rag_embeddings)
+            rag_embeddings = torch.tensor(np.array(rag_embeddings), dtype=torch.float32).to(input_ids.device)
+            rag_context = self.rag_projection(rag_embeddings)  # [batch, 768]
+
+            # Get pooled BERT for gating
+            with torch.no_grad():
+                bert_outputs = self.phase2_model.bert(input_ids=input_ids, attention_mask=attention_mask)
+                pooled_bert = bert_outputs.last_hidden_state.mean(dim=1)
 
             # Gated fusion
             gate_input = torch.cat([pooled_bert, rag_context], dim=-1)
             gate = self.rag_gate(gate_input)
             gate = gate * RAG_GATE_MAX  # Cap at 40%
 
-            fused_representation = pooled_bert + gate * rag_context
+            # Augment concept embeddings with RAG context
+            # Broadcast rag_context to match concept embeddings shape
+            rag_aug = (gate * rag_context).mean(dim=0, keepdim=True)  # [1, 768]
+            concept_embeddings_augmented = concept_embeddings_bert + rag_aug  # [num_concepts, 768]
         else:
-            fused_representation = pooled_bert
+            concept_embeddings_augmented = concept_embeddings_bert
 
-        # Replace BERT output with fused representation
-        # Create modified hidden states
-        fused_hidden = hidden_states.clone()
-        fused_hidden = fused_hidden + (fused_representation - pooled_bert).unsqueeze(1)
-
-        # Run through Phase 2 concept bottleneck and GAT
-        concept_embs = self.phase2_model.concept_embeddings.weight.unsqueeze(0).expand(batch_size, -1, -1)
-
-        bert_expanded = fused_representation.unsqueeze(1).expand(-1, hidden_states.shape[1], -1)
-        concept_context, concept_attn = self.phase2_model.cross_attention(
-            query=bert_expanded,
-            key=concept_embs,
-            value=concept_embs,
-            need_weights=True
+        # Run Phase 2 model with augmented concept embeddings
+        outputs = self.phase2_model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            concept_embeddings_bert=concept_embeddings_augmented
         )
 
-        pooled_context = concept_context.mean(dim=1)
+        return outputs
 
-        gate_input = torch.cat([fused_representation, pooled_context], dim=-1)
-        gate = self.phase2_model.gate_net(gate_input)
+# Load Phase 2 graph data
+print("\n📊 Loading Phase 2 graph data...")
+GRAPH_PATH = PHASE2_RUN / 'phase_2_graph'
+graph_data = torch.load(GRAPH_PATH / 'graph_data.pt', map_location='cpu')
+print(f"✅ Loaded graph: {graph_data.num_nodes} nodes, {graph_data.num_edges} edges")
 
-        bottleneck_output = gate * pooled_context
-        bottleneck_output = self.phase2_model.layer_norm(bottleneck_output)
+# Create BioClinicalBERT
+print("\n🤖 Loading BioClinicalBERT...")
+bert_model = AutoModel.from_pretrained('emilyalsentzer/Bio_ClinicalBERT')
 
-        # Concept predictions
-        concept_logits = self.phase2_model.concept_head(fused_representation)
-
-        # Graph convolution
-        if graph_data is not None:
-            x = graph_data.x
-            edge_index = graph_data.edge_index
-
-            for gat in self.phase2_model.gat_layers:
-                x = gat(x, edge_index)
-                x = F.elu(x)
-
-            x = self.phase2_model.gat_projection(x)
-            graph_output = x.mean(dim=0, keepdim=True).expand(batch_size, -1)
-        else:
-            graph_output = torch.zeros_like(bottleneck_output)
-
-        # Combine bottleneck + graph
-        combined = torch.cat([bottleneck_output, graph_output], dim=-1)
-        diagnosis_logits = self.phase2_model.diagnosis_head(combined)
-
-        return {
-            'logits': diagnosis_logits,
-            'concept_logits': concept_logits,
-            'concept_scores': torch.sigmoid(concept_logits),
-            'gate_values': gate,
-            'concept_attn': concept_attn
-        }
+# Create GAT encoder (same params as Phase 2)
+print("\n🔨 Building GAT encoder...")
+gat_encoder = GATEncoder(
+    in_channels=768,
+    hidden_channels=256,  # GRAPH_HIDDEN_DIM from Phase 2
+    num_layers=2,
+    heads=4,
+    dropout=0.3
+)
 
 # Initialize Phase 2 model
 print("\n🏗️  Initializing Phase 2 model...")
 phase2_model = ShifaMindPhase2GAT(
+    bert_model=bert_model,
+    gat_encoder=gat_encoder,
+    graph_data=graph_data,
     num_concepts=NUM_CONCEPTS,
-    num_labels=NUM_LABELS,
-    hidden_size=768,
-    gat_heads=4,
-    gat_layers=2
+    num_diagnoses=NUM_LABELS
 )
+
+# Load Phase 1 checkpoint for concept embeddings
+print(f"\n📥 Loading Phase 1 concept embeddings...")
+PHASE1_CHECKPOINT = PHASE1_RUN / 'checkpoints' / 'phase1' / 'phase1_best.pt'
+if not PHASE1_CHECKPOINT.exists():
+    print(f"❌ Phase 1 checkpoint not found at {PHASE1_CHECKPOINT}")
+    print("Creating fresh concept embeddings...")
+    concept_embeddings_bert = nn.Embedding(NUM_CONCEPTS, 768)
+    nn.init.xavier_uniform_(concept_embeddings_bert.weight)
+else:
+    phase1_ckpt = torch.load(PHASE1_CHECKPOINT, map_location='cpu')
+    # Extract concept embeddings from Phase 1
+    concept_emb_weight = phase1_ckpt['model_state_dict']['concept_embeddings.weight']
+    concept_embeddings_bert = nn.Embedding(NUM_CONCEPTS, 768)
+    concept_embeddings_bert.weight = nn.Parameter(concept_emb_weight)
+    print(f"✅ Loaded concept embeddings: {concept_emb_weight.shape}")
 
 # Load Phase 2 checkpoint
 print(f"\n📥 Loading Phase 2 checkpoint from {PHASE2_CHECKPOINT}...")
@@ -743,12 +825,6 @@ model = ShifaMindPhase3RAG(
 print(f"\n✅ ShifaMind Phase 3 model initialized")
 print(f"   Total parameters: {sum(p.numel() for p in model.parameters()):,}")
 print(f"   Trainable parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
-
-# Load graph data
-print("\n📊 Loading knowledge graph...")
-GRAPH_PATH = PHASE2_RUN / 'phase_2_graph'
-graph_data = torch.load(GRAPH_PATH / 'umls_graph.pt', map_location=device)
-print(f"✅ Graph loaded: {graph_data.num_nodes} nodes, {graph_data.num_edges} edges")
 
 # ============================================================================
 # DATASET
