@@ -792,25 +792,35 @@ phase2_model = ShifaMindPhase2GAT(
     num_diagnoses=NUM_LABELS
 )
 
-# Load Phase 1 checkpoint for concept embeddings
-print(f"\n📥 Loading Phase 1 concept embeddings...")
-PHASE1_CHECKPOINT = PHASE1_RUN / 'checkpoints' / 'phase1' / 'phase1_best.pt'
+# Load concept embeddings from Phase 2 checkpoint (best source!)
+print(f"\n📥 Loading concept embeddings...")
+
+# Load Phase 2 checkpoint (contains trained concept embeddings!)
+checkpoint = torch.load(PHASE2_CHECKPOINT, map_location='cpu', weights_only=False)
 
 concept_embeddings_bert = None
-if PHASE1_CHECKPOINT.exists():
-    try:
-        phase1_ckpt = torch.load(PHASE1_CHECKPOINT, map_location='cpu', weights_only=False)
-        # Try to extract concept embeddings from Phase 1
-        concept_emb_weight = phase1_ckpt['model_state_dict']['concept_embeddings.weight']
-        concept_embeddings_bert = nn.Embedding(NUM_CONCEPTS, 768)
-        concept_embeddings_bert.weight = nn.Parameter(concept_emb_weight)
-        print(f"✅ Loaded concept embeddings: {concept_emb_weight.shape}")
-    except (KeyError, FileNotFoundError) as e:
-        print(f"⚠️  Could not load concept embeddings: {e}")
-        concept_embeddings_bert = None
+if 'concept_embeddings' in checkpoint:
+    # Phase 2 saved concept embeddings at top level!
+    concept_emb_tensor = checkpoint['concept_embeddings']
+    concept_embeddings_bert = nn.Embedding(NUM_CONCEPTS, 768)
+    concept_embeddings_bert.weight = nn.Parameter(concept_emb_tensor)
+    print(f"✅ Loaded trained concept embeddings from Phase 2: {concept_emb_tensor.shape}")
+else:
+    print("⚠️  Phase 2 checkpoint missing concept_embeddings key")
+    # Try Phase 1 as fallback
+    PHASE1_CHECKPOINT = PHASE1_RUN / 'checkpoints' / 'phase1' / 'phase1_best.pt'
+    if PHASE1_CHECKPOINT.exists():
+        try:
+            phase1_ckpt = torch.load(PHASE1_CHECKPOINT, map_location='cpu', weights_only=False)
+            concept_emb_weight = phase1_ckpt['model_state_dict']['concept_embeddings.weight']
+            concept_embeddings_bert = nn.Embedding(NUM_CONCEPTS, 768)
+            concept_embeddings_bert.weight = nn.Parameter(concept_emb_weight)
+            print(f"✅ Loaded concept embeddings from Phase 1: {concept_emb_weight.shape}")
+        except (KeyError, FileNotFoundError) as e:
+            print(f"⚠️  Could not load from Phase 1: {e}")
 
 if concept_embeddings_bert is None:
-    print("Creating fresh concept embeddings...")
+    print("⚠️  Creating fresh concept embeddings (performance will be degraded!)")
     concept_embeddings_bert = nn.Embedding(NUM_CONCEPTS, 768)
     nn.init.xavier_uniform_(concept_embeddings_bert.weight)
     print("✅ Created fresh concept embeddings")
@@ -819,11 +829,10 @@ if concept_embeddings_bert is None:
 concept_embeddings_bert = concept_embeddings_bert.to(device)
 print(f"✅ Concept embeddings on device: {device}")
 
-# Load Phase 2 checkpoint
-print(f"\n📥 Loading Phase 2 checkpoint from {PHASE2_CHECKPOINT}...")
-checkpoint = torch.load(PHASE2_CHECKPOINT, map_location='cpu', weights_only=False)
+# Load Phase 2 model weights (checkpoint already loaded above)
+print(f"\n📥 Loading Phase 2 model weights...")
 phase2_model.load_state_dict(checkpoint['model_state_dict'], strict=True)
-print("✅ Loaded Phase 2 weights")
+print("✅ Loaded Phase 2 model weights")
 
 # Initialize Phase 3 model with RAG
 print("\n🏗️  Initializing Phase 3 model with RAG...")
