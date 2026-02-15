@@ -765,7 +765,7 @@ class ShifaMindPhase3RAG(nn.Module):
 # Load Phase 2 graph data
 print("\n📊 Loading Phase 2 graph data...")
 GRAPH_PATH = PHASE2_RUN / 'phase_2_graph'
-graph_data = torch.load(GRAPH_PATH / 'graph_data.pt', map_location='cpu')
+graph_data = torch.load(GRAPH_PATH / 'graph_data.pt', map_location='cpu', weights_only=False)
 print(f"✅ Loaded graph: {graph_data.num_nodes} nodes, {graph_data.num_edges} edges")
 
 # Create BioClinicalBERT
@@ -801,7 +801,7 @@ if not PHASE1_CHECKPOINT.exists():
     concept_embeddings_bert = nn.Embedding(NUM_CONCEPTS, 768)
     nn.init.xavier_uniform_(concept_embeddings_bert.weight)
 else:
-    phase1_ckpt = torch.load(PHASE1_CHECKPOINT, map_location='cpu')
+    phase1_ckpt = torch.load(PHASE1_CHECKPOINT, map_location='cpu', weights_only=False)
     # Extract concept embeddings from Phase 1
     concept_emb_weight = phase1_ckpt['model_state_dict']['concept_embeddings.weight']
     concept_embeddings_bert = nn.Embedding(NUM_CONCEPTS, 768)
@@ -810,7 +810,7 @@ else:
 
 # Load Phase 2 checkpoint
 print(f"\n📥 Loading Phase 2 checkpoint from {PHASE2_CHECKPOINT}...")
-checkpoint = torch.load(PHASE2_CHECKPOINT, map_location='cpu')
+checkpoint = torch.load(PHASE2_CHECKPOINT, map_location='cpu', weights_only=False)
 phase2_model.load_state_dict(checkpoint['model_state_dict'], strict=True)
 print("✅ Loaded Phase 2 weights")
 
