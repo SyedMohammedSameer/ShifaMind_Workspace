@@ -999,13 +999,13 @@ for epoch in range(EPOCHS):
         # Forward pass with mixed precision
         if USE_FP16:
             with torch.cuda.amp.autocast():
-                outputs = model(input_ids, attention_mask, graph_data, input_texts=texts)
+                outputs = model(input_ids, attention_mask, concept_embeddings_bert.weight, input_texts=texts)
                 loss, loss_components = criterion(outputs, labels, concept_labels)
                 loss = loss / GRADIENT_ACCUM_STEPS
 
             scaler.scale(loss).backward()
         else:
-            outputs = model(input_ids, attention_mask, graph_data, input_texts=texts)
+            outputs = model(input_ids, attention_mask, concept_embeddings_bert.weight, input_texts=texts)
             loss, loss_components = criterion(outputs, labels, concept_labels)
             loss = loss / GRADIENT_ACCUM_STEPS
             loss.backward()
@@ -1066,10 +1066,10 @@ for epoch in range(EPOCHS):
 
             if USE_FP16:
                 with torch.cuda.amp.autocast():
-                    outputs = model(input_ids, attention_mask, graph_data, input_texts=texts)
+                    outputs = model(input_ids, attention_mask, concept_embeddings_bert.weight, input_texts=texts)
                     loss, _ = criterion(outputs, labels, concept_labels)
             else:
-                outputs = model(input_ids, attention_mask, graph_data, input_texts=texts)
+                outputs = model(input_ids, attention_mask, concept_embeddings_bert.weight, input_texts=texts)
                 loss, _ = criterion(outputs, labels, concept_labels)
 
             val_losses.append(loss.item())
@@ -1159,9 +1159,9 @@ with torch.no_grad():
 
         if USE_FP16:
             with torch.cuda.amp.autocast():
-                outputs = model(input_ids, attention_mask, graph_data, input_texts=texts)
+                outputs = model(input_ids, attention_mask, concept_embeddings_bert.weight, input_texts=texts)
         else:
-            outputs = model(input_ids, attention_mask, graph_data, input_texts=texts)
+            outputs = model(input_ids, attention_mask, concept_embeddings_bert.weight, input_texts=texts)
 
         probs = torch.sigmoid(outputs['logits']).cpu().numpy()
         preds = (probs > 0.5).astype(int)
