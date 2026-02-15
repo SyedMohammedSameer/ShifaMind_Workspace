@@ -1162,7 +1162,7 @@ print("📊 FINAL EVALUATION ON TEST SET")
 print("="*80)
 
 # Load best model
-checkpoint = torch.load(CHECKPOINT_PATH / 'best_model.pth', map_location=device)
+checkpoint = torch.load(CHECKPOINT_PATH / 'best_model.pth', map_location=device, weights_only=False)
 model.load_state_dict(checkpoint['model_state_dict'])
 model.eval()
 
