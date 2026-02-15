@@ -96,29 +96,30 @@ print(f"   Results: {RESULTS_PATH}")
 # HYPERPARAMETERS (VERIFIED AGAINST ORIGINAL)
 # ============================================================================
 
-# ULTRA-OPTIMIZED FOR 96GB VRAM
-BATCH_SIZE = 64          # ← ULTRA: 8x original! (was 8, maxes out 96GB)
-LEARNING_RATE = 2e-5     # ← VERIFIED: Same as original
-NUM_EPOCHS = 5           # ← VERIFIED: Same as original (can do 7-10 for +0.01-0.02 F1)
-WARMUP_RATIO = 0.5       # ← VERIFIED: 50% warmup (half of epoch 1)
-MAX_LENGTH = 384         # ← VERIFIED: Same as original (NOT 512!)
+# EXACTLY MATCH ORIGINAL (VERIFIED)
+BATCH_SIZE = 8           # ← EXACT MATCH to original
+LEARNING_RATE = 2e-5     # ← EXACT MATCH to original
+NUM_EPOCHS = 5           # ← EXACT MATCH to original
+WARMUP_RATIO = 0.5       # ← EXACT MATCH: 50% warmup (half of epoch 1)
+MAX_LENGTH = 384         # ← EXACT MATCH to original
 
-# Loss weights
+# Loss weights (EXACT MATCH)
 LAMBDA_DX = 1.0
 LAMBDA_ALIGN = 0.5
-LAMBDA_CONCEPT = 0.3
+LAMBDA_CONCEPT = 2.0     # ← FIXED: Was 0.3, should be 2.0!
 
 # Mixed precision training
 USE_AMP = True           # ← FP16 for 2x speedup + 50% less VRAM
 
-print(f"\n⚙️  Hyperparameters (ULTRA-OPTIMIZED for 96GB VRAM):")
-print(f"   Batch size: {BATCH_SIZE} (8x original - MAXING OUT 96GB!)")
-print(f"   Learning rate: {LEARNING_RATE}")
-print(f"   Epochs: {NUM_EPOCHS} (sweet spot - can do 7-10 for tiny gains)")
-print(f"   Max length: {MAX_LENGTH} (VERIFIED: matches original)")
-print(f"   Mixed precision: {USE_AMP} (FP16)")
-print(f"   Expected VRAM usage: ~85-90GB / 96GB")
-print(f"   Expected training time: ~30-40 minutes ⚡⚡⚡")
+print(f"\n⚙️  Hyperparameters (EXACT MATCH to original):")
+print(f"   Batch size: {BATCH_SIZE} (VERIFIED: matches original)")
+print(f"   Learning rate: {LEARNING_RATE} (VERIFIED)")
+print(f"   Epochs: {NUM_EPOCHS} (VERIFIED)")
+print(f"   Max length: {MAX_LENGTH} (VERIFIED)")
+print(f"   Loss weights: dx={LAMBDA_DX}, align={LAMBDA_ALIGN}, concept={LAMBDA_CONCEPT} (VERIFIED)")
+print(f"   Mixed precision: {USE_AMP} (FP16 for speed)")
+print(f"   Expected VRAM usage: ~15-20GB / 96GB")
+print(f"   Expected training time: ~3-4 hours (with batch_size=8)")
 
 # ============================================================================
 # GLOBAL CONCEPTS (FIXED - REMOVED DUPLICATES)
@@ -540,8 +541,8 @@ val_dataset = ConceptDataset(
     max_length=MAX_LENGTH
 )
 
-train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=8, pin_memory=True, prefetch_factor=2)
-val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE * 2, num_workers=8, pin_memory=True, prefetch_factor=2)
+train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=16)
 
 print(f"\n✅ Datasets:")
 print(f"   Train batches: {len(train_loader)} (batch_size={BATCH_SIZE})")
