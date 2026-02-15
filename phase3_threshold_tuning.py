@@ -35,11 +35,12 @@ print("\n" + "="*80)
 print("🎯 SHIFAMIND v302 PHASE 3 - THRESHOLD TUNING & FINAL EVALUATION")
 print("="*80)
 
-# Paths
-BASE_DIR = Path('/content/drive/MyDrive/ShifaMind/11_ShifaMind_v302')
+# Paths - EXACT same logic as phase3_training_optimized.py
+BASE_PATH = Path('/content/drive/MyDrive/ShifaMind')
+SHIFAMIND_V302_BASE = BASE_PATH / '11_ShifaMind_v302'
 
 # Find most recent Phase 3 run
-phase3_runs = sorted([d for d in BASE_DIR.glob('run_*_phase3') if d.is_dir()])
+phase3_runs = sorted([d for d in SHIFAMIND_V302_BASE.glob('run_*_phase3') if d.is_dir()])
 if not phase3_runs:
     raise FileNotFoundError("❌ No Phase 3 runs found!")
 
@@ -50,10 +51,8 @@ CHECKPOINT_PATH = PHASE3_RUN / 'phase_3_models'
 RESULTS_PATH = PHASE3_RUN / 'phase_3_results'
 EVIDENCE_PATH = PHASE3_RUN / 'evidence_store'
 
-# Get Phase 2 run from Phase 3 run name (extract timestamp)
-# Phase 3 run format: run_YYYYMMDD_HHMMSS_phase3
-phase3_timestamp = PHASE3_RUN.name.split('_')[1] + '_' + PHASE3_RUN.name.split('_')[2]
-phase2_runs = sorted([d for d in BASE_DIR.glob('run_*') if d.is_dir() and '_phase3' not in d.name])
+# Find Phase 2 run (most recent in v302 folder, excluding phase3)
+phase2_runs = sorted([d for d in SHIFAMIND_V302_BASE.glob('run_*') if d.is_dir() and '_phase3' not in d.name])
 if not phase2_runs:
     raise FileNotFoundError("❌ No Phase 2 runs found!")
 PHASE2_RUN = phase2_runs[-1]
@@ -62,12 +61,13 @@ print(f"📁 Phase 2 run: {PHASE2_RUN.name}")
 GRAPH_PATH = PHASE2_RUN / 'phase_2_graphs'
 PHASE2_CHECKPOINT = PHASE2_RUN / 'phase_2_models' / 'best_model.pth'
 
-# Phase 1 shared data (exclude Phase 3 runs)
-phase1_runs = sorted([d for d in BASE_DIR.glob('run_*') if (d / 'shared_data').exists() and '_phase3' not in d.name])
-if not phase1_runs:
-    raise FileNotFoundError("❌ No Phase 1 runs with shared_data found!")
-PHASE1_RUN = phase1_runs[-1]
-print(f"📁 Phase 1 shared data: {PHASE1_RUN.name}")
+# Phase 1 shared data - look in 10_ShifaMind folder (NOT 11_ShifaMind_v302!)
+PHASE1_BASE = BASE_PATH / '10_ShifaMind'
+phase1_folders = sorted([d for d in PHASE1_BASE.glob('run_*') if d.is_dir()], reverse=True)
+if not phase1_folders:
+    raise FileNotFoundError("❌ No Phase 1 run found in 10_ShifaMind!")
+PHASE1_RUN = phase1_folders[0]
+print(f"📁 Phase 1 shared data: {PHASE1_RUN.name} (from 10_ShifaMind)")
 
 SHARED_DATA_PATH = PHASE1_RUN / 'shared_data'
 
@@ -107,11 +107,17 @@ with open(SHARED_DATA_PATH / 'val_split.pkl', 'rb') as f:
 with open(SHARED_DATA_PATH / 'test_split.pkl', 'rb') as f:
     df_test = pickle.load(f)
 
-# Load concept/diagnosis mappings
-with open(SHARED_DATA_PATH / 'all_concepts.json', 'r') as f:
+# Load concept/diagnosis mappings - EXACT same as phase3_training_optimized.py
+# Load concept list from Phase 1 run
+with open(SHARED_DATA_PATH / 'concept_list.json', 'r') as f:
     ALL_CONCEPTS = json.load(f)
-with open(SHARED_DATA_PATH / 'top_50_codes.json', 'r') as f:
-    top_50_codes = json.load(f)
+
+# Load Top-50 codes from original run (same as Phase 3 training)
+ORIGINAL_RUN = BASE_PATH / '10_ShifaMind' / 'run_20260102_203225'
+ORIGINAL_SHARED = ORIGINAL_RUN / 'shared_data'
+with open(ORIGINAL_SHARED / 'top50_icd10_info.json', 'r') as f:
+    top50_info = json.load(f)
+    top_50_codes = top50_info['top_50_codes']
 
 print(f"\n✅ Loaded data:")
 print(f"   Train: {len(df_train):,} samples")
