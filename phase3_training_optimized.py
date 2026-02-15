@@ -795,18 +795,25 @@ phase2_model = ShifaMindPhase2GAT(
 # Load Phase 1 checkpoint for concept embeddings
 print(f"\n📥 Loading Phase 1 concept embeddings...")
 PHASE1_CHECKPOINT = PHASE1_RUN / 'checkpoints' / 'phase1' / 'phase1_best.pt'
-if not PHASE1_CHECKPOINT.exists():
-    print(f"❌ Phase 1 checkpoint not found at {PHASE1_CHECKPOINT}")
+
+concept_embeddings_bert = None
+if PHASE1_CHECKPOINT.exists():
+    try:
+        phase1_ckpt = torch.load(PHASE1_CHECKPOINT, map_location='cpu', weights_only=False)
+        # Try to extract concept embeddings from Phase 1
+        concept_emb_weight = phase1_ckpt['model_state_dict']['concept_embeddings.weight']
+        concept_embeddings_bert = nn.Embedding(NUM_CONCEPTS, 768)
+        concept_embeddings_bert.weight = nn.Parameter(concept_emb_weight)
+        print(f"✅ Loaded concept embeddings: {concept_emb_weight.shape}")
+    except (KeyError, FileNotFoundError) as e:
+        print(f"⚠️  Could not load concept embeddings: {e}")
+        concept_embeddings_bert = None
+
+if concept_embeddings_bert is None:
     print("Creating fresh concept embeddings...")
     concept_embeddings_bert = nn.Embedding(NUM_CONCEPTS, 768)
     nn.init.xavier_uniform_(concept_embeddings_bert.weight)
-else:
-    phase1_ckpt = torch.load(PHASE1_CHECKPOINT, map_location='cpu', weights_only=False)
-    # Extract concept embeddings from Phase 1
-    concept_emb_weight = phase1_ckpt['model_state_dict']['concept_embeddings.weight']
-    concept_embeddings_bert = nn.Embedding(NUM_CONCEPTS, 768)
-    concept_embeddings_bert.weight = nn.Parameter(concept_emb_weight)
-    print(f"✅ Loaded concept embeddings: {concept_emb_weight.shape}")
+    print("✅ Created fresh concept embeddings")
 
 # Load Phase 2 checkpoint
 print(f"\n📥 Loading Phase 2 checkpoint from {PHASE2_CHECKPOINT}...")
