@@ -59,7 +59,7 @@ PHASE2_RUN = phase2_runs[-1]
 print(f"📁 Phase 2 run: {PHASE2_RUN.name}")
 
 GRAPH_PATH = PHASE2_RUN / 'phase_2_graph'
-PHASE2_CHECKPOINT = PHASE2_RUN / 'phase_2_models' / 'best_model.pth'
+PHASE2_CHECKPOINT = PHASE2_RUN / 'phase_2_models' / 'phase2_best.pt'
 
 # Phase 1 shared data - look in 10_ShifaMind folder (NOT 11_ShifaMind_v302!)
 PHASE1_BASE = BASE_PATH / '10_ShifaMind'
