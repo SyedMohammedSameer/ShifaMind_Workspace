@@ -643,7 +643,8 @@ class ShifaMindPhase2GAT(nn.Module):
         hidden_states = outputs.last_hidden_state  # [batch, seq_len, 768]
 
         # 2. Get GAT-enhanced concept embeddings
-        gat_concepts = self.get_graph_concept_embeddings()  # [num_concepts, 768]
+        gat_concepts = self.get_graph_concept_embeddings()  # [num_concepts, 256]
+        gat_concepts = self.graph_proj(gat_concepts)  # Project to [num_concepts, 768]
 
         # 3. Fuse BERT + GAT concept embeddings
         bert_concepts = concept_embeddings_bert.unsqueeze(0).expand(batch_size, -1, -1)
