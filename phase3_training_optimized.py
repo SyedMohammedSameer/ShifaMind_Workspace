@@ -842,9 +842,11 @@ print("📦 PREPARING DATASETS")
 print("="*80)
 
 class RAGDataset(Dataset):
-    def __init__(self, df, tokenizer, concept_labels):
+    def __init__(self, df, tokenizer, concept_labels, top50_codes):
         self.texts = df['text'].tolist()
-        self.labels = df['labels'].tolist()
+        # Extract multi-label columns (Top-50 diagnosis codes)
+        # The CSV has diagnosis codes as column names, extract them
+        self.labels = df[top50_codes].values  # [num_samples, 50]
         self.tokenizer = tokenizer
         self.concept_labels = concept_labels
 
@@ -872,9 +874,9 @@ class RAGDataset(Dataset):
 
 tokenizer = AutoTokenizer.from_pretrained('emilyalsentzer/Bio_ClinicalBERT')
 
-train_dataset = RAGDataset(df_train, tokenizer, train_concept_labels)
-val_dataset = RAGDataset(df_val, tokenizer, val_concept_labels)
-test_dataset = RAGDataset(df_test, tokenizer, test_concept_labels)
+train_dataset = RAGDataset(df_train, tokenizer, train_concept_labels, TOP_50_CODES)
+val_dataset = RAGDataset(df_val, tokenizer, val_concept_labels, TOP_50_CODES)
+test_dataset = RAGDataset(df_test, tokenizer, test_concept_labels, TOP_50_CODES)
 
 # Use pin_memory for faster GPU transfer
 train_loader = DataLoader(
