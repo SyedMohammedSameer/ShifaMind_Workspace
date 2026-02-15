@@ -246,19 +246,418 @@ with open(SHARED_DATA_PATH / 'top50_icd10_info.json', 'w') as f:
     json.dump(top50_save, f, indent=2)
 
 # ============================================================================
-# CONTINUE WITH REST OF TRAINING...
-# (Model definition, dataset, training loop, evaluation)
-# This is identical to shifamind301.py
+# STEP 4: GENERATE CONCEPT LABELS
 # ============================================================================
 
 print("\n" + "=" * 80)
-print("✅ DATA PREPARATION COMPLETE")
+print("🧠 GENERATING CONCEPT LABELS")
 print("=" * 80)
-print("\nℹ️  This script stops here for now.")
-print("   Next steps:")
-print("   1. Run verify_data_splits.py to check if recovery worked")
-print("   2. If recovery failed, complete this training script")
-print("   3. Or use the existing shifamind301.py with these new splits")
 
-print(f"\n📁 New run folder ready: {OUTPUT_BASE.name}")
-print(f"   All splits saved deterministically with seed={SEED}")
+def generate_concept_labels(texts, concepts):
+    """Generate binary concept labels based on keyword presence"""
+    labels = []
+    for text in tqdm(texts, desc="Labeling concepts"):
+        text_lower = str(text).lower()
+        concept_label = [1 if concept in text_lower else 0 for concept in concepts]
+        labels.append(concept_label)
+    return np.array(labels)
+
+print(f"\n🔍 Using {len(GLOBAL_CONCEPTS)} global concepts")
+
+train_concept_labels = generate_concept_labels(df_train['text'], GLOBAL_CONCEPTS)
+val_concept_labels = generate_concept_labels(df_val['text'], GLOBAL_CONCEPTS)
+test_concept_labels = generate_concept_labels(df_test['text'], GLOBAL_CONCEPTS)
+
+print(f"\n✅ Concept labels generated:")
+print(f"   Shape: {train_concept_labels.shape}")
+print(f"   Avg concepts/sample (train): {train_concept_labels.sum(axis=1).mean():.2f}")
+
+# Save concept labels
+np.save(SHARED_DATA_PATH / 'train_concept_labels.npy', train_concept_labels)
+np.save(SHARED_DATA_PATH / 'val_concept_labels.npy', val_concept_labels)
+np.save(SHARED_DATA_PATH / 'test_concept_labels.npy', test_concept_labels)
+
+print(f"💾 Saved concept labels to: {SHARED_DATA_PATH}")
+
+# ============================================================================
+# MODEL ARCHITECTURE
+# ============================================================================
+
+print("\n" + "=" * 80)
+print("🏗️  BUILDING MODEL")
+print("=" * 80)
+
+class ConceptBottleneckCrossAttention(nn.Module):
+    """Multiplicative concept bottleneck with cross-attention"""
+    def __init__(self, hidden_size, num_heads=8, dropout=0.1, layer_idx=1):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_heads = num_heads
+        self.head_dim = hidden_size // num_heads
+        self.layer_idx = layer_idx
+
+        self.query = nn.Linear(hidden_size, hidden_size)
+        self.key = nn.Linear(hidden_size, hidden_size)
+        self.value = nn.Linear(hidden_size, hidden_size)
+        self.out_proj = nn.Linear(hidden_size, hidden_size)
+
+        self.gate_net = nn.Sequential(
+            nn.Linear(hidden_size * 2, hidden_size),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size, hidden_size),
+            nn.Sigmoid()
+        )
+
+        self.dropout = nn.Dropout(dropout)
+        self.layer_norm = nn.LayerNorm(hidden_size)
+
+    def forward(self, hidden_states, concept_embeddings, attention_mask=None):
+        batch_size, seq_len, _ = hidden_states.shape
+        num_concepts = concept_embeddings.shape[0]
+
+        concepts_batch = concept_embeddings.unsqueeze(0).expand(batch_size, -1, -1)
+
+        Q = self.query(hidden_states).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        K = self.key(concepts_batch).view(batch_size, num_concepts, self.num_heads, self.head_dim).transpose(1, 2)
+        V = self.value(concepts_batch).view(batch_size, num_concepts, self.num_heads, self.head_dim).transpose(1, 2)
+
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.head_dim ** 0.5)
+        attn_weights = F.softmax(scores, dim=-1)
+        attn_weights = self.dropout(attn_weights)
+
+        context = torch.matmul(attn_weights, V)
+        context = context.transpose(1, 2).contiguous().view(batch_size, seq_len, self.hidden_size)
+        context = self.out_proj(context)
+
+        pooled_text = hidden_states.mean(dim=1, keepdim=True).expand(-1, seq_len, -1)
+        pooled_context = context.mean(dim=1, keepdim=True).expand(-1, seq_len, -1)
+        gate_input = torch.cat([pooled_text, pooled_context], dim=-1)
+        gate = self.gate_net(gate_input)
+
+        output = gate * context
+        output = self.layer_norm(output)
+
+        return output, attn_weights.mean(dim=1), gate.mean()
+
+
+class ShifaMindPhase1(nn.Module):
+    """ShifaMind Phase 1: Concept Bottleneck with Top-50 ICD-10"""
+    def __init__(self, base_model, num_concepts, num_classes, fusion_layers=[9, 11]):
+        super().__init__()
+        self.base_model = base_model
+        self.hidden_size = base_model.config.hidden_size
+        self.num_concepts = num_concepts
+        self.fusion_layers = fusion_layers
+
+        self.concept_embeddings = nn.Parameter(
+            torch.randn(num_concepts, self.hidden_size) * 0.02
+        )
+
+        self.fusion_modules = nn.ModuleDict({
+            str(layer): ConceptBottleneckCrossAttention(self.hidden_size, layer_idx=layer)
+            for layer in fusion_layers
+        })
+
+        self.concept_head = nn.Linear(self.hidden_size, num_concepts)
+        self.diagnosis_head = nn.Linear(self.hidden_size, num_classes)
+        self.dropout = nn.Dropout(0.1)
+
+    def forward(self, input_ids, attention_mask, return_attention=False):
+        outputs = self.base_model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=True,
+            return_dict=True
+        )
+
+        hidden_states = outputs.hidden_states
+        current_hidden = outputs.last_hidden_state
+
+        attention_maps = {}
+        gate_values = []
+
+        for layer_idx in self.fusion_layers:
+            if str(layer_idx) in self.fusion_modules:
+                layer_hidden = hidden_states[layer_idx]
+                fused_hidden, attn, gate = self.fusion_modules[str(layer_idx)](
+                    layer_hidden, self.concept_embeddings, attention_mask
+                )
+                current_hidden = fused_hidden
+                gate_values.append(gate.item())
+
+                if return_attention:
+                    attention_maps[f'layer_{layer_idx}'] = attn
+
+        cls_hidden = self.dropout(current_hidden[:, 0, :])
+        concept_scores = torch.sigmoid(self.concept_head(cls_hidden))
+        diagnosis_logits = self.diagnosis_head(cls_hidden)
+
+        result = {
+            'logits': diagnosis_logits,
+            'concept_scores': concept_scores,
+            'hidden_states': current_hidden,
+            'cls_hidden': cls_hidden,
+            'avg_gate': np.mean(gate_values) if gate_values else 0.0
+        }
+
+        if return_attention:
+            result['attention_maps'] = attention_maps
+
+        return result
+
+
+class MultiObjectiveLoss(nn.Module):
+    """Multi-objective loss: L_dx + L_align + L_concept"""
+    def __init__(self, lambda_dx=1.0, lambda_align=0.5, lambda_concept=0.3):
+        super().__init__()
+        self.lambda_dx = lambda_dx
+        self.lambda_align = lambda_align
+        self.lambda_concept = lambda_concept
+        self.bce = nn.BCEWithLogitsLoss()
+
+    def forward(self, outputs, dx_labels, concept_labels):
+        loss_dx = self.bce(outputs['logits'], dx_labels)
+
+        dx_probs = torch.sigmoid(outputs['logits'])
+        concept_scores = outputs['concept_scores']
+        loss_align = torch.abs(
+            dx_probs.unsqueeze(-1) - concept_scores.unsqueeze(1)
+        ).mean()
+
+        concept_logits = torch.logit(concept_scores.clamp(1e-7, 1-1e-7))
+        loss_concept = self.bce(concept_logits, concept_labels)
+
+        total_loss = (
+            self.lambda_dx * loss_dx +
+            self.lambda_align * loss_align +
+            self.lambda_concept * loss_concept
+        )
+
+        components = {
+            'total': total_loss.item(),
+            'dx': loss_dx.item(),
+            'align': loss_align.item(),
+            'concept': loss_concept.item()
+        }
+
+        return total_loss, components
+
+
+class ConceptDataset(Dataset):
+    def __init__(self, texts, labels, concept_labels, tokenizer, max_length=512):
+        self.texts = texts
+        self.labels = labels
+        self.concept_labels = concept_labels
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+
+    def __len__(self):
+        return len(self.texts)
+
+    def __getitem__(self, idx):
+        encoding = self.tokenizer(
+            str(self.texts[idx]),
+            padding='max_length',
+            truncation=True,
+            max_length=self.max_length,
+            return_tensors='pt'
+        )
+
+        return {
+            'input_ids': encoding['input_ids'].flatten(),
+            'attention_mask': encoding['attention_mask'].flatten(),
+            'labels': torch.FloatTensor(self.labels[idx]),
+            'concept_labels': torch.FloatTensor(self.concept_labels[idx])
+        }
+
+
+print("✅ Architecture defined")
+
+# ============================================================================
+# TRAINING
+# ============================================================================
+
+print("\n" + "=" * 80)
+print("🏋️  TRAINING PHASE 1")
+print("=" * 80)
+
+tokenizer = AutoTokenizer.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
+base_model = AutoModel.from_pretrained("emilyalsentzer/Bio_ClinicalBERT").to(device)
+
+model = ShifaMindPhase1(
+    base_model,
+    num_concepts=len(GLOBAL_CONCEPTS),
+    num_classes=len(TOP_50_CODES),
+    fusion_layers=[9, 11]
+).to(device)
+
+print(f"✅ Model loaded: {sum(p.numel() for p in model.parameters()):,} parameters")
+print(f"   Num concepts: {len(GLOBAL_CONCEPTS)}")
+print(f"   Num diagnoses: {len(TOP_50_CODES)}")
+
+# Create datasets
+train_dataset = ConceptDataset(
+    df_train['text'].tolist(),
+    df_train['labels'].tolist(),
+    train_concept_labels,
+    tokenizer,
+    max_length=MAX_LENGTH
+)
+val_dataset = ConceptDataset(
+    df_val['text'].tolist(),
+    df_val['labels'].tolist(),
+    val_concept_labels,
+    tokenizer,
+    max_length=MAX_LENGTH
+)
+test_dataset = ConceptDataset(
+    df_test['text'].tolist(),
+    df_test['labels'].tolist(),
+    test_concept_labels,
+    tokenizer,
+    max_length=MAX_LENGTH
+)
+
+train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE * 2)
+test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE * 2)
+
+print(f"✅ Datasets created:")
+print(f"   Train batches: {len(train_loader)}")
+print(f"   Val batches:   {len(val_loader)}")
+print(f"   Test batches:  {len(test_loader)}")
+
+# Training setup
+criterion = MultiObjectiveLoss(
+    lambda_dx=LAMBDA_DX,
+    lambda_align=LAMBDA_ALIGN,
+    lambda_concept=LAMBDA_CONCEPT
+)
+optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0.01)
+
+num_warmup_steps = int(len(train_loader) * WARMUP_RATIO)
+num_training_steps = len(train_loader) * NUM_EPOCHS
+
+scheduler = get_cosine_schedule_with_warmup(
+    optimizer,
+    num_warmup_steps=num_warmup_steps,
+    num_training_steps=num_training_steps
+)
+
+print(f"\n⚙️  Training setup:")
+print(f"   Optimizer: AdamW (lr={LEARNING_RATE}, wd=0.01)")
+print(f"   Scheduler: Cosine with warmup")
+print(f"   Warmup steps: {num_warmup_steps}")
+print(f"   Total steps: {num_training_steps}")
+
+best_f1 = 0.0
+history = {'train_loss': [], 'val_f1': [], 'concept_f1': []}
+
+# Training loop
+for epoch in range(NUM_EPOCHS):
+    print(f"\n{'='*80}\nEpoch {epoch+1}/{NUM_EPOCHS}\n{'='*80}")
+
+    # Training
+    model.train()
+    epoch_losses = {'total': [], 'dx': [], 'align': [], 'concept': []}
+
+    for batch in tqdm(train_loader, desc="Training"):
+        input_ids = batch['input_ids'].to(device)
+        attention_mask = batch['attention_mask'].to(device)
+        dx_labels = batch['labels'].to(device)
+        concept_labels = batch['concept_labels'].to(device)
+
+        optimizer.zero_grad()
+        outputs = model(input_ids, attention_mask)
+        loss, components = criterion(outputs, dx_labels, concept_labels)
+
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        optimizer.step()
+        scheduler.step()
+
+        for k, v in components.items():
+            epoch_losses[k].append(v)
+
+    print(f"\n📊 Epoch {epoch+1} Losses:")
+    print(f"   Total:     {np.mean(epoch_losses['total']):.4f}")
+    print(f"   Diagnosis: {np.mean(epoch_losses['dx']):.4f}")
+    print(f"   Alignment: {np.mean(epoch_losses['align']):.4f}")
+    print(f"   Concept:   {np.mean(epoch_losses['concept']):.4f}")
+
+    # Validation
+    model.eval()
+    all_dx_preds, all_dx_labels = [], []
+    all_concept_preds, all_concept_labels = [], []
+
+    with torch.no_grad():
+        for batch in tqdm(val_loader, desc="Validating"):
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            dx_labels = batch['labels'].to(device)
+            concept_labels = batch['concept_labels'].to(device)
+
+            outputs = model(input_ids, attention_mask)
+
+            all_dx_preds.append(torch.sigmoid(outputs['logits']).cpu())
+            all_dx_labels.append(dx_labels.cpu())
+            all_concept_preds.append(outputs['concept_scores'].cpu())
+            all_concept_labels.append(concept_labels.cpu())
+
+    all_dx_preds = torch.cat(all_dx_preds, dim=0).numpy()
+    all_dx_labels = torch.cat(all_dx_labels, dim=0).numpy()
+    all_concept_preds = torch.cat(all_concept_preds, dim=0).numpy()
+    all_concept_labels = torch.cat(all_concept_labels, dim=0).numpy()
+
+    # Compute metrics at 0.5 threshold
+    dx_pred_binary = (all_dx_preds > 0.5).astype(int)
+    concept_pred_binary = (all_concept_preds > 0.5).astype(int)
+
+    dx_f1 = f1_score(all_dx_labels, dx_pred_binary, average='macro', zero_division=0)
+    concept_f1 = f1_score(all_concept_labels, concept_pred_binary, average='macro', zero_division=0)
+
+    print(f"\n📈 Validation Metrics (threshold=0.5):")
+    print(f"   Diagnosis Macro F1: {dx_f1:.4f}")
+    print(f"   Concept Macro F1:   {concept_f1:.4f}")
+
+    history['train_loss'].append(np.mean(epoch_losses['total']))
+    history['val_f1'].append(dx_f1)
+    history['concept_f1'].append(concept_f1)
+
+    # Save best checkpoint
+    if dx_f1 > best_f1:
+        best_f1 = dx_f1
+        checkpoint = {
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'macro_f1': best_f1,
+            'concept_f1': concept_f1,
+            'concept_embeddings': model.concept_embeddings.data.cpu(),
+            'num_concepts': model.num_concepts,
+            'config': {
+                'num_concepts': len(GLOBAL_CONCEPTS),
+                'num_classes': len(TOP_50_CODES),
+                'fusion_layers': [9, 11],
+                'lambda_dx': LAMBDA_DX,
+                'lambda_align': LAMBDA_ALIGN,
+                'lambda_concept': LAMBDA_CONCEPT,
+                'top_50_codes': TOP_50_CODES,
+                'timestamp': timestamp,
+                'seed': SEED
+            }
+        }
+        torch.save(checkpoint, CHECKPOINT_PATH / 'phase1_best.pt')
+        print(f"   💾 Saved best checkpoint (Macro F1: {best_f1:.4f})")
+
+# Save training history
+with open(RESULTS_PATH / 'training_history.json', 'w') as f:
+    json.dump(history, f, indent=2)
+
+print("\n" + "=" * 80)
+print("✅ TRAINING COMPLETE!")
+print("=" * 80)
+print(f"🏆 Best Validation Macro F1: {best_f1:.4f}")
+print(f"📁 Run folder: {OUTPUT_BASE.name}")
+print(f"💾 Checkpoint: {CHECKPOINT_PATH / 'phase1_best.pt'}")
