@@ -10,6 +10,7 @@ import json
 import pickle
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -225,29 +226,51 @@ class RAGRetriever:
 # ============================================================================
 
 class GATEncoder(nn.Module):
+    """GAT encoder for learning concept embeddings from knowledge graph"""
     def __init__(self, in_channels, hidden_channels, num_layers=2, heads=4, dropout=0.3):
         super().__init__()
+
+        self.num_layers = num_layers
         self.convs = nn.ModuleList()
 
-        # First layer
-        self.convs.append(gnn.GATConv(in_channels, hidden_channels, heads=heads, dropout=dropout))
+        # First layer: in -> hidden
+        self.convs.append(gnn.GATConv(
+            in_channels,
+            hidden_channels // heads,  # Output per head
+            heads=heads,
+            dropout=dropout,
+            concat=True
+        ))
 
         # Middle layers
         for _ in range(num_layers - 2):
-            self.convs.append(gnn.GATConv(hidden_channels * heads, hidden_channels, heads=heads, dropout=dropout))
+            self.convs.append(gnn.GATConv(
+                hidden_channels,
+                hidden_channels // heads,
+                heads=heads,
+                dropout=dropout,
+                concat=True
+            ))
 
-        # Last layer
+        # Last layer: hidden -> hidden (average heads)
         if num_layers > 1:
-            self.convs.append(gnn.GATConv(hidden_channels * heads, hidden_channels, heads=1, concat=False, dropout=dropout))
+            self.convs.append(gnn.GATConv(
+                hidden_channels,
+                hidden_channels,
+                heads=1,
+                dropout=dropout,
+                concat=False
+            ))
 
-        self.dropout = dropout
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, edge_index):
         for i, conv in enumerate(self.convs):
             x = conv(x, edge_index)
-            if i < len(self.convs) - 1:
-                x = torch.relu(x)
-                x = torch.dropout(x, p=self.dropout, train=self.training)
+            if i < self.num_layers - 1:
+                x = F.elu(x)
+                x = self.dropout(x)
+
         return x
 
 
