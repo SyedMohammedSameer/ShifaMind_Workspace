@@ -63,6 +63,20 @@ if not ORIGINAL_CSV.exists():
 df_full = pd.read_csv(ORIGINAL_CSV)
 print(f"✅ Loaded {len(df_full):,} samples")
 
+# Find the diagnosis column (could be 'icd10_code', 'diagnosis', 'label', etc.)
+diagnosis_col = None
+possible_cols = ['icd10_code', 'diagnosis', 'label', 'icd_code', 'code', 'dx_code']
+for col in possible_cols:
+    if col in df_full.columns:
+        diagnosis_col = col
+        break
+
+if diagnosis_col:
+    print(f"✅ Found diagnosis column: '{diagnosis_col}'")
+else:
+    print(f"⚠️  No diagnosis column found in: {df_full.columns.tolist()}")
+    print(f"   Will use non-stratified split")
+
 # ============================================================================
 # LOAD EXISTING SPLITS
 # ============================================================================
@@ -99,19 +113,35 @@ print(f"   Test:  {len(df_test):,} (15%)")
 print(f"   Total: {expected_train_size + len(df_val) + len(df_test):,}")
 
 # Recreate the exact same split (70/15/15 with random_state=42)
-df_train_new, df_temp = train_test_split(
-    df_full,
-    test_size=0.3,
-    random_state=42,
-    stratify=df_full['icd10_code']
-)
+if diagnosis_col:
+    # Stratified split (preferred)
+    df_train_new, df_temp = train_test_split(
+        df_full,
+        test_size=0.3,
+        random_state=42,
+        stratify=df_full[diagnosis_col]
+    )
 
-df_val_new, df_test_new = train_test_split(
-    df_temp,
-    test_size=0.5,
-    random_state=42,
-    stratify=df_temp['icd10_code']
-)
+    df_val_new, df_test_new = train_test_split(
+        df_temp,
+        test_size=0.5,
+        random_state=42,
+        stratify=df_temp[diagnosis_col]
+    )
+else:
+    # Non-stratified split (fallback)
+    print("   Using non-stratified split")
+    df_train_new, df_temp = train_test_split(
+        df_full,
+        test_size=0.3,
+        random_state=42
+    )
+
+    df_val_new, df_test_new = train_test_split(
+        df_temp,
+        test_size=0.5,
+        random_state=42
+    )
 
 # Use the train split
 df_train = df_train_new
