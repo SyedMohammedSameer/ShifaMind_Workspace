@@ -834,6 +834,10 @@ print(f"\n📥 Loading Phase 2 model weights...")
 phase2_model.load_state_dict(checkpoint['model_state_dict'], strict=True)
 print("✅ Loaded Phase 2 model weights")
 
+# Move Phase 2 model to device BEFORE wrapping in Phase 3
+phase2_model = phase2_model.to(device)
+print(f"✅ Phase 2 model moved to device: {device}")
+
 # Initialize Phase 3 model with RAG
 print("\n🏗️  Initializing Phase 3 model with RAG...")
 model = ShifaMindPhase3RAG(
