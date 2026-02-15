@@ -445,12 +445,19 @@ class SimpleRAG:
 
         dimension = embeddings.shape[1]
 
-        # Use GPU index if available
+        # Try GPU index first, fallback to CPU if not available
+        use_gpu = False
         if device.type == 'cuda':
-            print("   Building GPU FAISS index...")
-            res = faiss.StandardGpuResources()
-            cpu_index = faiss.IndexFlatIP(dimension)
-            self.index = faiss.index_cpu_to_gpu(res, 0, cpu_index)
+            try:
+                print("   Building GPU FAISS index...")
+                res = faiss.StandardGpuResources()
+                cpu_index = faiss.IndexFlatIP(dimension)
+                self.index = faiss.index_cpu_to_gpu(res, 0, cpu_index)
+                use_gpu = True
+            except (AttributeError, RuntimeError) as e:
+                print(f"   ⚠️  GPU FAISS not available ({e.__class__.__name__})")
+                print("   Falling back to CPU FAISS (still fast for 1050 docs!)")
+                self.index = faiss.IndexFlatIP(dimension)
         else:
             self.index = faiss.IndexFlatIP(dimension)
 
@@ -459,7 +466,7 @@ class SimpleRAG:
         print(f"✅ FAISS index built:")
         print(f"   Dimension: {dimension}")
         print(f"   Total vectors: {self.index.ntotal}")
-        print(f"   Device: {'GPU' if device.type == 'cuda' else 'CPU'}")
+        print(f"   Device: {'GPU' if use_gpu else 'CPU'}")
 
     def retrieve(self, query: str) -> str:
         if self.index is None:
