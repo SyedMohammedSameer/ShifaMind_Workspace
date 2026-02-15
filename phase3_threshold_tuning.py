@@ -418,7 +418,7 @@ class ShifaMindPhase3RAG(nn.Module):
             nn.Sigmoid()
         )
 
-    def forward(self, input_ids, attention_mask, concept_embeddings_bert, input_texts=None):
+    def forward(self, input_ids, attention_mask, concept_embeddings_bert, texts=None, input_texts=None, use_rag=True):
         """
         Phase 3 forward with RAG augmentation
 
@@ -426,12 +426,18 @@ class ShifaMindPhase3RAG(nn.Module):
             input_ids: [batch, seq_len]
             attention_mask: [batch, seq_len]
             concept_embeddings_bert: [num_concepts, 768] - learned BERT concept embeddings from Phase 1
+            texts: List of input texts for RAG retrieval (optional) - alias for input_texts
             input_texts: List of input texts for RAG retrieval (optional)
+            use_rag: Whether to use RAG (default True)
         """
+        # Support both parameter names
+        if input_texts is None:
+            input_texts = texts
+
         batch_size = input_ids.shape[0]
 
         # RAG retrieval and augmentation
-        if self.rag is not None and input_texts is not None:
+        if use_rag and self.rag is not None and input_texts is not None:
             # Retrieve relevant evidence
             rag_texts = [self.rag.retrieve(text) for text in input_texts]
 
