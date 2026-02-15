@@ -78,40 +78,45 @@ with open(SHARED_DATA_PATH / 'test_split.pkl', 'rb') as f:
 print(f"   Test: {len(df_test):,} samples")
 
 # ============================================================================
-# RECREATE TRAIN SPLIT
+# RECREATE TRAIN SPLIT (SAME RANDOM STATE AS ORIGINAL!)
 # ============================================================================
 
-print(f"\n🔧 Recreating train split...")
+print(f"\n🔧 Recreating train split with same random state...")
 
-# Get indices of val and test samples
-if 'subject_id' in df_val.columns and 'hadm_id' in df_val.columns:
-    # Use subject_id + hadm_id as unique identifier
-    val_ids = set(zip(df_val['subject_id'], df_val['hadm_id']))
-    test_ids = set(zip(df_test['subject_id'], df_test['hadm_id']))
-    full_ids = list(zip(df_full['subject_id'], df_full['hadm_id']))
+# The original Phase 1 used stratified 70/15/15 split with random_state=42
+# We'll recreate it exactly!
 
-    # Get train indices (everything not in val or test)
-    train_mask = [id_pair not in val_ids and id_pair not in test_ids
-                  for id_pair in full_ids]
-    df_train = df_full[train_mask].reset_index(drop=True)
+from sklearn.model_selection import train_test_split
 
-elif hasattr(df_val, 'index'):
-    # Try using pandas index
-    val_idx = set(df_val.index)
-    test_idx = set(df_test.index)
-    train_mask = [i not in val_idx and i not in test_idx
-                  for i in df_full.index]
-    df_train = df_full[train_mask].reset_index(drop=True)
+# Expected sizes based on train_concept_labels.npy
+train_concept_labels = np.load(SHARED_DATA_PATH / 'train_concept_labels.npy')
+expected_train_size = train_concept_labels.shape[0]
 
-else:
-    # Fallback: use row position
-    print("⚠️  Warning: Using row-based split (less reliable)")
-    n_val = len(df_val)
-    n_test = len(df_test)
-    n_train = len(df_full) - n_val - n_test
-    df_train = df_full.iloc[:n_train].reset_index(drop=True)
+print(f"\n📊 Expected split sizes:")
+print(f"   Train: {expected_train_size:,} (70%)")
+print(f"   Val:   {len(df_val):,} (15%)")
+print(f"   Test:  {len(df_test):,} (15%)")
+print(f"   Total: {expected_train_size + len(df_val) + len(df_test):,}")
 
-print(f"✅ Train split recreated: {len(df_train):,} samples")
+# Recreate the exact same split (70/15/15 with random_state=42)
+df_train_new, df_temp = train_test_split(
+    df_full,
+    test_size=0.3,
+    random_state=42,
+    stratify=df_full['icd10_code']
+)
+
+df_val_new, df_test_new = train_test_split(
+    df_temp,
+    test_size=0.5,
+    random_state=42,
+    stratify=df_temp['icd10_code']
+)
+
+# Use the train split
+df_train = df_train_new
+
+print(f"\n✅ Train split recreated: {len(df_train):,} samples")
 
 # ============================================================================
 # VERIFY
@@ -119,18 +124,17 @@ print(f"✅ Train split recreated: {len(df_train):,} samples")
 
 print(f"\n🔍 Verifying against train_concept_labels.npy...")
 
-train_concept_labels = np.load(SHARED_DATA_PATH / 'train_concept_labels.npy')
-expected_train_size = train_concept_labels.shape[0]
-
 print(f"   Expected: {expected_train_size:,} samples")
 print(f"   Got:      {len(df_train):,} samples")
 
 if len(df_train) == expected_train_size:
-    print(f"   ✅ MATCH!")
+    print(f"   ✅ PERFECT MATCH!")
+    print(f"   The split is EXACT - same random seed used!")
 else:
     print(f"   ⚠️  SIZE MISMATCH!")
     print(f"   Difference: {abs(len(df_train) - expected_train_size):,} samples")
-    print(f"   This might still work, but the split may not be exact.")
+    print(f"   ERROR: This will break Phase 3!")
+    raise ValueError(f"Train split size mismatch: {len(df_train)} vs {expected_train_size}")
 
 # ============================================================================
 # SAVE
