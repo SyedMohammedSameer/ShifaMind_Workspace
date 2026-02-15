@@ -815,6 +815,10 @@ if concept_embeddings_bert is None:
     nn.init.xavier_uniform_(concept_embeddings_bert.weight)
     print("✅ Created fresh concept embeddings")
 
+# Move concept embeddings to device
+concept_embeddings_bert = concept_embeddings_bert.to(device)
+print(f"✅ Concept embeddings on device: {device}")
+
 # Load Phase 2 checkpoint
 print(f"\n📥 Loading Phase 2 checkpoint from {PHASE2_CHECKPOINT}...")
 checkpoint = torch.load(PHASE2_CHECKPOINT, map_location='cpu', weights_only=False)
