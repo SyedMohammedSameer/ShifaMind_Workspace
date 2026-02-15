@@ -175,8 +175,12 @@ train_concept_labels = np.load(OLD_SHARED / 'train_concept_labels.npy')
 val_concept_labels = np.load(OLD_SHARED / 'val_concept_labels.npy')
 test_concept_labels = np.load(OLD_SHARED / 'test_concept_labels.npy')
 
-# Load Top-50 codes
-with open(OLD_SHARED / 'top50_icd10_info.json', 'r') as f:
+# Load Top-50 codes (from ORIGINAL run, not Phase 1 run)
+# Phase 1 loaded this but didn't save it to the new folder
+ORIGINAL_RUN = BASE_PATH / '10_ShifaMind' / 'run_20260102_203225'
+ORIGINAL_SHARED = ORIGINAL_RUN / 'shared_data'
+
+with open(ORIGINAL_SHARED / 'top50_icd10_info.json', 'r') as f:
     top50_info = json.load(f)
     TOP_50_CODES = top50_info['top_50_codes']
 
