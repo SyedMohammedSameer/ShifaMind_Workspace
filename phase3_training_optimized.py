@@ -85,8 +85,8 @@ print("="*80)
 BASE_PATH = Path('/content/drive/MyDrive/ShifaMind')
 SHIFAMIND_V302_BASE = BASE_PATH / '11_ShifaMind_v302'
 
-# Find newest Phase 2 run folder
-run_folders = sorted([d for d in SHIFAMIND_V302_BASE.glob('run_*') if d.is_dir()], reverse=True)
+# Find newest Phase 2 run folder (exclude Phase 3 runs!)
+run_folders = sorted([d for d in SHIFAMIND_V302_BASE.glob('run_*') if d.is_dir() and 'phase3' not in d.name], reverse=True)
 if not run_folders:
     print("❌ No Phase 2 run found!")
     sys.exit(1)
