@@ -84,15 +84,15 @@ RESULTS_PATH = RUN_FOLDER / 'phase_3_results'
 SHARED_DATA_PATH = RUN_FOLDER / 'shared_data'
 EVIDENCE_PATH = RUN_FOLDER / 'evidence_store'
 
-# Find the data folder (should be from the Phase 2 run)
-phase2_runs = sorted([d for d in SHIFAMIND_V302_BASE.glob('run_2026*') if d.is_dir() and 'phase3' not in d.name], reverse=True)
-if phase2_runs:
-    DATA_FOLDER = phase2_runs[0] / 'shared_data'
-else:
-    print("❌ No Phase 2 data folder found!")
+# Find the data folder (Phase 2 doesn't copy shared_data, so load from Phase 1)
+PHASE1_BASE = BASE_PATH / '10_ShifaMind'
+phase1_runs = sorted([d for d in PHASE1_BASE.glob('run_*') if d.is_dir()], reverse=True)
+if not phase1_runs:
+    print("❌ No Phase 1 run found!")
     sys.exit(1)
 
-print(f"📁 Data folder: {DATA_FOLDER}")
+DATA_FOLDER = phase1_runs[0] / 'shared_data'
+print(f"📁 Data folder: {DATA_FOLDER} (from Phase 1 run: {phase1_runs[0].name})")
 
 # Load checkpoint
 BEST_MODEL_PATH = CHECKPOINT_PATH / 'best_model.pth'
@@ -452,7 +452,8 @@ print(f"✅ Model loaded successfully")
 
 # Load graph
 print("\n📊 Loading knowledge graph...")
-# Find Phase 2 run with graph
+# Find Phase 2 runs with graph
+phase2_runs = sorted([d for d in SHIFAMIND_V302_BASE.glob('run_*') if d.is_dir() and 'phase3' not in d.name], reverse=True)
 phase2_run_with_graph = None
 for run in phase2_runs:
     graph_path = run / 'phase_2_graph' / 'umls_graph.pt'

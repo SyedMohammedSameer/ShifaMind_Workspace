@@ -85,22 +85,31 @@ print("="*80)
 BASE_PATH = Path('/content/drive/MyDrive/ShifaMind')
 SHIFAMIND_V302_BASE = BASE_PATH / '11_ShifaMind_v302'
 
-# Find newest run folder
+# Find newest Phase 2 run folder
 run_folders = sorted([d for d in SHIFAMIND_V302_BASE.glob('run_*') if d.is_dir()], reverse=True)
 if not run_folders:
     print("❌ No Phase 2 run found!")
     sys.exit(1)
 
-OLD_RUN = run_folders[0]
-print(f"\n📁 Loading from Phase 2 run: {OLD_RUN.name}")
+PHASE2_RUN = run_folders[0]
+print(f"\n📁 Loading from Phase 2 run: {PHASE2_RUN.name}")
 
 # Phase 2 checkpoint path (Phase 2 saves as phase2_best.pt)
-PHASE2_CHECKPOINT = OLD_RUN / 'phase_2_models' / 'phase2_best.pt'
+PHASE2_CHECKPOINT = PHASE2_RUN / 'phase_2_models' / 'phase2_best.pt'
 if not PHASE2_CHECKPOINT.exists():
     print(f"❌ Phase 2 checkpoint not found at {PHASE2_CHECKPOINT}")
     sys.exit(1)
 
-OLD_SHARED = OLD_RUN / 'shared_data'
+# Find Phase 1 run for shared_data (Phase 2 doesn't copy shared_data to its run folder)
+PHASE1_BASE = BASE_PATH / '10_ShifaMind'
+phase1_folders = sorted([d for d in PHASE1_BASE.glob('run_*') if d.is_dir()], reverse=True)
+if not phase1_folders:
+    print("❌ No Phase 1 run found!")
+    sys.exit(1)
+
+PHASE1_RUN = phase1_folders[0]
+OLD_SHARED = PHASE1_RUN / 'shared_data'
+print(f"📁 Loading shared data from Phase 1 run: {PHASE1_RUN.name}")
 
 # Create new Phase 3 folders
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -730,7 +739,7 @@ print(f"   Trainable parameters: {sum(p.numel() for p in model.parameters() if p
 
 # Load graph data
 print("\n📊 Loading knowledge graph...")
-GRAPH_PATH = OLD_RUN / 'phase_2_graph'
+GRAPH_PATH = PHASE2_RUN / 'phase_2_graph'
 graph_data = torch.load(GRAPH_PATH / 'umls_graph.pt', map_location=device)
 print(f"✅ Graph loaded: {graph_data.num_nodes} nodes, {graph_data.num_edges} edges")
 
