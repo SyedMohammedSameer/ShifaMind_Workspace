@@ -94,8 +94,8 @@ if not run_folders:
 OLD_RUN = run_folders[0]
 print(f"\n📁 Loading from Phase 2 run: {OLD_RUN.name}")
 
-# Phase 2 checkpoint path
-PHASE2_CHECKPOINT = OLD_RUN / 'phase_2_models' / 'best_model.pth'
+# Phase 2 checkpoint path (Phase 2 saves as phase2_best.pt)
+PHASE2_CHECKPOINT = OLD_RUN / 'phase_2_models' / 'phase2_best.pt'
 if not PHASE2_CHECKPOINT.exists():
     print(f"❌ Phase 2 checkpoint not found at {PHASE2_CHECKPOINT}")
     sys.exit(1)
