@@ -62,8 +62,8 @@ print(f"📁 Phase 2 run: {PHASE2_RUN.name}")
 GRAPH_PATH = PHASE2_RUN / 'phase_2_graphs'
 PHASE2_CHECKPOINT = PHASE2_RUN / 'phase_2_models' / 'best_model.pth'
 
-# Phase 1 shared data
-phase1_runs = sorted([d for d in BASE_DIR.glob('run_*') if (d / 'shared_data').exists()])
+# Phase 1 shared data (exclude Phase 3 runs)
+phase1_runs = sorted([d for d in BASE_DIR.glob('run_*') if (d / 'shared_data').exists() and '_phase3' not in d.name])
 if not phase1_runs:
     raise FileNotFoundError("❌ No Phase 1 runs with shared_data found!")
 PHASE1_RUN = phase1_runs[-1]
