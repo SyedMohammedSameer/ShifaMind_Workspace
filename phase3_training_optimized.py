@@ -766,7 +766,10 @@ class ShifaMindPhase3RAG(nn.Module):
 print("\n📊 Loading Phase 2 graph data...")
 GRAPH_PATH = PHASE2_RUN / 'phase_2_graph'
 graph_data = torch.load(GRAPH_PATH / 'graph_data.pt', map_location='cpu', weights_only=False)
+# Move graph data to device immediately
+graph_data = graph_data.to(device)
 print(f"✅ Loaded graph: {graph_data.num_nodes} nodes, {graph_data.num_edges} edges")
+print(f"✅ Graph data on device: {device}")
 
 # Create BioClinicalBERT
 print("\n🤖 Loading BioClinicalBERT...")
