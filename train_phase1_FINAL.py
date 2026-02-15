@@ -161,12 +161,28 @@ assert len(GLOBAL_CONCEPTS) == len(set(GLOBAL_CONCEPTS)), "ERROR: Duplicate conc
 print(f"\n🧠 Global Concepts: {len(GLOBAL_CONCEPTS)} (VERIFIED: no duplicates)")
 
 # ============================================================================
-# STEP 1: LOAD DATA
+# STEP 1: LOAD TOP-50 CODES FIRST
 # ============================================================================
 
 print("\n" + "=" * 80)
 print("📊 LOADING DATA")
 print("=" * 80)
+
+# Load TOP_50_CODES FIRST (needed to reconstruct labels)
+top50_info_path = SHIFAMIND2_BASE / 'run_20260102_203225' / 'shared_data' / 'top50_icd10_info.json'
+if not top50_info_path.exists():
+    print("❌ top50_icd10_info.json not found!")
+    exit(1)
+
+with open(top50_info_path, 'r') as f:
+    top50_info = json.load(f)
+TOP_50_CODES = top50_info['top_50_codes']
+
+print(f"\n✅ Loaded Top-50 codes: {len(TOP_50_CODES)}")
+
+# ============================================================================
+# STEP 2: LOAD DATA CSV
+# ============================================================================
 
 # Load existing processed data
 DATA_CSV_PATH = SHIFAMIND2_BASE / 'mimic_dx_data_top50.csv'
@@ -179,23 +195,14 @@ if not DATA_CSV_PATH.exists():
     print("❌ mimic_dx_data_top50.csv not found!")
     exit(1)
 
-print(f"\n✅ Loading from: {DATA_CSV_PATH}")
+print(f"✅ Loading from: {DATA_CSV_PATH}")
 df_all = pd.read_csv(DATA_CSV_PATH)
-df_all['labels'] = df_all['labels'].apply(eval)
 
-print(f"✅ Loaded {len(df_all):,} samples")
+# Reconstruct 'labels' column from individual code columns
+# CSV has: subject_id, hadm_id, text, CODE1, CODE2, ..., CODE50
+df_all['labels'] = df_all[TOP_50_CODES].values.tolist()
 
-# Load TOP_50_CODES
-top50_info_path = SHIFAMIND2_BASE / 'run_20260102_203225' / 'shared_data' / 'top50_icd10_info.json'
-if top50_info_path.exists():
-    with open(top50_info_path, 'r') as f:
-        top50_info = json.load(f)
-    TOP_50_CODES = top50_info['top_50_codes']
-else:
-    print("⚠️  Using default Top-50 codes")
-    TOP_50_CODES = list(range(50))
-
-print(f"✅ Top-50 codes: {len(TOP_50_CODES)}")
+print(f"✅ Loaded {len(df_all):,} samples with {len(TOP_50_CODES)} label columns")
 
 # ============================================================================
 # STEP 2: CREATE SPLITS (70/15/15 - VERIFIED AGAINST ORIGINAL)
